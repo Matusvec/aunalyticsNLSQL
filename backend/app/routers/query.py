@@ -18,6 +18,11 @@ class ExecuteQueryRequest(BaseModel):
     sql: str
     limit: int = 200
 
+class AskRequest(BaseModel):
+    db_filename: str = Field(..., examples=["chinook.sqlite"])
+    question: str = Field(..., examples=["Show the top 5 customers by total spending"])
+    limit: int = 200
+
 @router.post("/generate-sql")
 async def generate_sql(payload: GenerateSQLRequest):
     try:
@@ -46,6 +51,43 @@ async def generate_sql(payload: GenerateSQLRequest):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"SQL generation failed: {exc}") from exc
+
+
+@router.post("/ask")
+async def ask(payload: AskRequest):
+    try:
+        schema_summary = build_schema_summary_impl(payload.db_filename)
+
+        generated = await generate_sql_from_question(
+            question=payload.question,
+            schema_summary=schema_summary,
+        )
+
+        validate_readonly_sql(generated.sql)
+
+        execution_result = run_sql_readonly_impl(
+            db_filename=payload.db_filename,
+            sql=generated.sql,
+            limit=payload.limit,
+        )
+
+        return {
+            "db_filename": payload.db_filename,
+            "question": payload.question,
+            "sql": generated.sql,
+            "assumptions": generated.assumptions,
+            "confidence": generated.confidence,
+            "columns": execution_result["columns"],
+            "rows": execution_result["rows"],
+            "row_count": execution_result["row_count"],
+            "limit_applied": execution_result["limit_applied"],
+        }
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Ask failed: {exc}") from exc
 
 
 @router.post("/execute")
