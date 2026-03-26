@@ -1,0 +1,12 @@
+# API backend
+fastapi==0.135.2
+uvicorn==0.42.0
+pydantic==2.12.5
+httpx==0.28.1
+sqlglot==30.0.3
+
+# MCP server
+mcp==1.26.0
+
+# Local Ollama chat client
+ollama==0.6.1

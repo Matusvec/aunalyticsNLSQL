@@ -3,14 +3,13 @@ from __future__ import annotations
 import os
 import sqlite3
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("sqlite-mcp")
 
 DB_DIR = Path(__file__).resolve().parents[1] / "db"
-
 
 def _safe_db_path(db_filename: str) -> Path:
     """
@@ -181,5 +180,17 @@ def database_schema_resource(db_filename: str) -> str:
 
 
 if __name__ == "__main__":
-    print("Starting SQLite MCP server on http://localhost:8000")
-    mcp.run()
+    Transport = Literal["stdio", "sse", "streamable-http"]
+    transport_env = os.getenv("MCP_TRANSPORT", "streamable-http").lower()
+    transport: Transport = (
+        transport_env if transport_env in ("stdio", "sse", "streamable-http") else "streamable-http"
+    )
+    mcp.settings.host = os.getenv("MCP_HOST", mcp.settings.host)
+    mcp.settings.port = int(os.getenv("MCP_PORT", str(mcp.settings.port)))
+
+    if transport == "stdio":
+        print("Starting SQLite MCP server using stdio transport")
+    else:
+        print(f"Starting SQLite MCP server on http://{mcp.settings.host}:{mcp.settings.port} using {transport}")
+
+    mcp.run(transport=transport)
