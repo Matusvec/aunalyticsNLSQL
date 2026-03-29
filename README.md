@@ -34,7 +34,10 @@ Start the FastAPI app and the MCP server together:
 
 The startup scripts prefer the project virtualenv when present (`.venv` at the repo root or inside `backend`), then fall back to `py`, `python`, or `python3`. They do not require a local `.venv`, but they do require that the project requirements are already installed for whichever Python they find.
 
-If you get an error in Powershell saying you can't execute scripts on your machine you may have to run Set-ExecutionPolicy Unrestricted
+If you get an error in Powershell saying you can't execute scripts on your machine you may have to run 
+```powershell
+Set-ExecutionPolicy Unrestricted
+```
 
 This starts:
 - the FastAPI app from `backend/app/main.py`

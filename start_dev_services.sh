@@ -83,6 +83,20 @@ cleanup() {
   exit "$exit_code"
 }
 
+wait_for_first_exit() {
+  local pid
+
+  while true; do
+    for pid in "$@"; do
+      if ! kill -0 "$pid" 2>/dev/null; then
+        wait "$pid"
+        return $?
+      fi
+    done
+    sleep 1
+  done
+}
+
 trap cleanup EXIT INT TERM
 
 "${PYTHON_CMD[@]}" -m uvicorn app.main:app --reload --host "$APP_HOST" --port "$APP_PORT" &
@@ -96,8 +110,8 @@ echo "FastAPI app: http://$APP_HOST:$APP_PORT"
 if [[ "$MCP_TRANSPORT" == "streamable-http" ]]; then
   echo "MCP server:   http://$MCP_HOST:$MCP_PORT/mcp ($MCP_TRANSPORT)"
 else
-  echo "MCP server:   http://$MCP_HOST:$MCP_PORT ($MCP_TRANSPORT)"
+echo "MCP server:   http://$MCP_HOST:$MCP_PORT ($MCP_TRANSPORT)"
 fi
 echo "Press Ctrl-C to stop both services."
 
-wait -n "$APP_PID" "$MCP_PID"
+wait_for_first_exit "$APP_PID" "$MCP_PID"
