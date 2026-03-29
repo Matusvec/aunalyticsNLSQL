@@ -14,9 +14,6 @@ if str(BACKEND_DIR) not in sys.path:
 
 from app.main import app
 from app.routers import query as query_router
-from app.services.ollama_service import SQLGenerationResult
-
-
 client = TestClient(app)
 
 
@@ -31,74 +28,69 @@ def _post_ask(question: str, limit: int = 5) -> httpx.Response:
     )
 
 
-@pytest.mark.parametrize(
-    ("sql", "expected_columns"),
-    [
-        (
-            "SELECT FirstName, LastName FROM customers ORDER BY CustomerId LIMIT 3",
-            ["FirstName", "LastName"],
-        ),
-        (
-            "SELECT CustomerId FROM customers WHERE FirstName = '___definitely_missing___'",
-            ["CustomerId"],
-        ),
-    ],
-)
-def test_ask_success_paths(monkeypatch: pytest.MonkeyPatch, sql: str, expected_columns: list[str]) -> None:
-    async def fake_generate_sql_from_question(question: str, schema_summary: str) -> SQLGenerationResult:
-        return SQLGenerationResult(
-            sql=sql,
-            assumptions=["Interpreted customers as the source table."],
-            confidence=0.84,
+def test_ask_success_path_uses_tool_flow(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services.ask_service import AskWithToolsResult, ToolTrace
+
+    async def fake_ask_question_with_tools(question: str, db_filename: str, limit: int) -> AskWithToolsResult:
+        assert question == "unused"
+        assert db_filename == "chinook.db"
+        assert limit == 5
+        return AskWithToolsResult(
+            answer="Luís Gonçalves is the first customer in the table.",
+            sql="SELECT FirstName, LastName FROM customers ORDER BY CustomerId LIMIT 1",
+            tool_calls=[
+                ToolTrace(
+                    tool_name="run_sql_readonly",
+                    arguments={
+                        "db_filename": "chinook.db",
+                        "sql": "SELECT FirstName, LastName FROM customers ORDER BY CustomerId LIMIT 1",
+                        "limit": 5,
+                    },
+                    result_preview='{"columns":["FirstName","LastName"],"rows":[{"FirstName":"Luís","LastName":"Gonçalves"}],"row_count":1,"limit_applied":5}',
+                    structured_result={
+                        "columns": ["FirstName", "LastName"],
+                        "rows": [{"FirstName": "Luís", "LastName": "Gonçalves"}],
+                        "row_count": 1,
+                        "limit_applied": 5,
+                    },
+                )
+            ],
+            columns=["FirstName", "LastName"],
+            rows=[{"FirstName": "Luís", "LastName": "Gonçalves"}],
+            row_count=1,
+            limit_applied=5,
         )
 
-    monkeypatch.setattr(query_router, "generate_sql_from_question", fake_generate_sql_from_question)
+    monkeypatch.setattr(query_router, "ask_question_with_tools", fake_ask_question_with_tools)
 
     response = _post_ask("unused")
 
     assert response.status_code == 200
     body = response.json()
-    assert body["sql"] == sql
-    assert body["assumptions"] == ["Interpreted customers as the source table."]
-    assert body["confidence"] == 0.84
-    assert body["columns"] == expected_columns
-
-    if "___definitely_missing___" in sql:
-        assert body["rows"] == []
-        assert body["row_count"] == 0
-    else:
-        assert body["row_count"] == 3
-        assert body["rows"][0]["FirstName"] == "Luís"
+    assert body["answer"] == "Luís Gonçalves is the first customer in the table."
+    assert body["sql"] == "SELECT FirstName, LastName FROM customers ORDER BY CustomerId LIMIT 1"
+    assert body["columns"] == ["FirstName", "LastName"]
+    assert body["rows"][0]["FirstName"] == "Luís"
+    assert body["tool_calls"][0]["tool_name"] == "run_sql_readonly"
 
 
-def test_ask_returns_500_for_malformed_model_output(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_generate_sql_from_question(question: str, schema_summary: str) -> SQLGenerationResult:
-        SQLGenerationResult.model_validate(
-            {
-                "sql": "SELECT 1",
-                "assumptions": "should have been a list",
-                "confidence": "not-a-number",
-            }
-        )
-        raise AssertionError("unreachable")
+def test_ask_returns_404_for_missing_database(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_ask_question_with_tools(question: str, db_filename: str, limit: int):
+        raise FileNotFoundError("Database not found: missing.db")
 
-    monkeypatch.setattr(query_router, "generate_sql_from_question", fake_generate_sql_from_question)
+    monkeypatch.setattr(query_router, "ask_question_with_tools", fake_ask_question_with_tools)
 
     response = _post_ask("unused")
 
-    assert response.status_code == 500
-    assert "Ask failed:" in response.json()["detail"]
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Database not found: missing.db"
 
 
-def test_ask_rejects_invalid_sql_from_model(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_generate_sql_from_question(question: str, schema_summary: str) -> SQLGenerationResult:
-        return SQLGenerationResult(
-            sql="DROP TABLE customers",
-            assumptions=["Guessed the user wanted destructive cleanup."],
-            confidence=0.12,
-        )
+def test_ask_returns_400_for_invalid_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_ask_question_with_tools(question: str, db_filename: str, limit: int):
+        raise ValueError("Only read-only SELECT queries are allowed")
 
-    monkeypatch.setattr(query_router, "generate_sql_from_question", fake_generate_sql_from_question)
+    monkeypatch.setattr(query_router, "ask_question_with_tools", fake_ask_question_with_tools)
 
     response = _post_ask("unused")
 
@@ -106,34 +98,11 @@ def test_ask_rejects_invalid_sql_from_model(monkeypatch: pytest.MonkeyPatch) -> 
     assert response.json()["detail"] == "Only read-only SELECT queries are allowed"
 
 
-@pytest.mark.parametrize(
-    "sql",
-    [
-        "SELECT missing_column FROM customers",
-        "SELECT CustomerId FROM missing_table",
-    ],
-)
-def test_ask_handles_nonexistent_table_or_column(monkeypatch: pytest.MonkeyPatch, sql: str) -> None:
-    async def fake_generate_sql_from_question(question: str, schema_summary: str) -> SQLGenerationResult:
-        return SQLGenerationResult(
-            sql=sql,
-            assumptions=["Mapped the request to a schema object that does not exist."],
-            confidence=0.18,
-        )
-
-    monkeypatch.setattr(query_router, "generate_sql_from_question", fake_generate_sql_from_question)
-
-    response = _post_ask("unused")
-
-    assert response.status_code == 500
-    assert "Ask failed:" in response.json()["detail"]
-
-
-def test_ask_returns_500_when_ollama_is_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_generate_sql_from_question(question: str, schema_summary: str) -> SQLGenerationResult:
+def test_ask_returns_500_when_tool_flow_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_ask_question_with_tools(question: str, db_filename: str, limit: int):
         raise httpx.ConnectError("Connection refused")
 
-    monkeypatch.setattr(query_router, "generate_sql_from_question", fake_generate_sql_from_question)
+    monkeypatch.setattr(query_router, "ask_question_with_tools", fake_ask_question_with_tools)
 
     response = _post_ask("unused")
 

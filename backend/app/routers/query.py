@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from app.services.ask_service import ask_question_with_tools
 from app.services.ollama_service import generate_sql_from_question
 from app.services.sql_validator import validate_readonly_sql
 from mcp_sqlite.db_utils import build_schema_summary_impl, run_sql_readonly_impl
@@ -56,31 +57,20 @@ async def generate_sql(payload: GenerateSQLRequest):
 @router.post("/ask")
 async def ask(payload: AskRequest):
     try:
-        schema_summary = build_schema_summary_impl(payload.db_filename)
-
-        generated = await generate_sql_from_question(
+        result = await ask_question_with_tools(
             question=payload.question,
-            schema_summary=schema_summary,
-        )
-
-        validate_readonly_sql(generated.sql)
-
-        execution_result = run_sql_readonly_impl(
             db_filename=payload.db_filename,
-            sql=generated.sql,
             limit=payload.limit,
         )
 
         return {
             "db_filename": payload.db_filename,
             "question": payload.question,
-            "sql": generated.sql,
-            "assumptions": generated.assumptions,
-            "confidence": generated.confidence,
-            "columns": execution_result["columns"],
-            "rows": execution_result["rows"],
-            "row_count": execution_result["row_count"],
-            "limit_applied": execution_result["limit_applied"],
+            "sql": result.sql,
+            "columns": result.columns,
+            "rows": result.rows,
+            "row_count": result.row_count,
+            "limit_applied": result.limit_applied,
         }
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

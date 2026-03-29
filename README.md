@@ -2,16 +2,24 @@
 
 ## Development
 
-Download requirements:
+Install app requirements:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-or for dev/test:
+```powershell
+py -m pip install -r requirements.txt
+```
+
+Install dev/test requirements:
 
 ```bash
 pip install -r requirements-dev.txt
+```
+
+```powershell
+py -m pip install -r requirements-dev.txt
 ```
 
 Start the FastAPI app and the MCP server together:
@@ -20,20 +28,32 @@ Start the FastAPI app and the MCP server together:
 ./start_dev_services.sh
 ```
 
+```powershell
+bash ./start_dev_services.sh
+```
+
+The script uses the active Python environment, `python`, or `python3` in that order. It does not require a local `.venv`, but it does require that the project requirements are already installed for whichever Python it finds.
+
 This starts:
 - the FastAPI app from `backend/app/main.py`
 - the MCP server from `backend/mcp_sqlite/server.py`
+
+When `MCP_TRANSPORT=streamable-http`, the MCP endpoint used by `/api/ask` is `http://127.0.0.1:8001/mcp` by default. You can override that with `MCP_SERVER_URL`.
 
 Press `Ctrl-C` to stop both processes.
 
 ## Terminal Client
 
-With the backend running, you can use the terminal client to pick a database from `backend/db` and send natural-language questions to `POST /api/generate-sql`.
+With the backend running, you can use the terminal client to pick a database from `backend/db` and send natural-language questions to `POST /api/ask`. That route now lets Ollama choose MCP tools, execute them through the MCP server, and then produce a final answer with the tool result as context.
 
 Run it with:
 
 ```bash
-./.venv/bin/python backend_cli.py
+python3 backend_cli.py
+```
+
+```powershell
+py .\backend_cli.py
 ```
 
 The client will:
@@ -53,10 +73,20 @@ Run the end-to-end tests for the `/api/ask` route:
 ./run_ask_tests.sh
 ```
 
+```powershell
+bash ./run_ask_tests.sh
+```
+
+The script uses the active Python environment, `python`, or `python3` in that order, and exits with a helpful message if `pytest` is not installed.
+
 This runs:
 
 ```bash
-.venv/bin/python -m pytest -v -rP backend/tests/test_ask_route.py
+python -m pytest -v -rP backend/tests/test_ask_route.py
+```
+
+```powershell
+py -m pytest -v -rP backend/tests/test_ask_route.py
 ```
 
 The flags mean:
@@ -69,3 +99,6 @@ You can also pass extra pytest arguments through the script:
 ./run_ask_tests.sh -k happy
 ```
 
+```powershell
+bash ./run_ask_tests.sh -k happy
+```

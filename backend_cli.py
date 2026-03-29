@@ -8,7 +8,7 @@ from pathlib import Path
 import httpx
 
 
-API_URL = "http://127.0.0.1:8000/api/generate-sql"
+API_URL = "http://127.0.0.1:8000/api/ask"
 DB_DIR = Path(__file__).resolve().parent / "backend" / "db"
 EXIT_COMMANDS = {"q", "quit", "exit"}
 
@@ -44,6 +44,32 @@ def ask_question(client: httpx.Client, db_filename: str, question: str) -> dict:
     )
     response.raise_for_status()
     return response.json()
+
+
+def print_response(result: dict) -> None:
+    sql = result.get("sql")
+    rows = result.get("rows") or []
+    columns = result.get("columns") or []
+    row_count = result.get("row_count")
+
+    if sql:
+        print("SQL:")
+        print(sql)
+    else:
+        print("SQL:")
+        print("<none>")
+
+    if row_count is not None:
+        print(f"\nRows returned: {row_count}")
+
+    if columns:
+        print(f"Columns: {json.dumps(columns, ensure_ascii=False)}")
+
+    print("Rows:")
+    if rows:
+        print(json.dumps(rows, indent=2, ensure_ascii=False))
+    else:
+        print("[]")
 
 
 def main() -> int:
@@ -89,7 +115,7 @@ def main() -> int:
                 print()
                 continue
 
-            print(json.dumps(result, indent=2, ensure_ascii=False))
+            print_response(result)
             print()
 
     print("Goodbye.")

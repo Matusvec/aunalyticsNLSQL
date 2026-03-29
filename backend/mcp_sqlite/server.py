@@ -50,7 +50,7 @@ def list_databases() -> list[str]:
 
 @mcp.tool()
 def list_tables(db_filename: str) -> list[str]:
-    """Return all user tables in a SQLite database."""
+    """Return all user tables in a SQLite database. Use only if the provided schema summary is not enough."""
     with _connect(db_filename) as conn:
         rows = conn.execute("""
             SELECT name
@@ -64,7 +64,7 @@ def list_tables(db_filename: str) -> list[str]:
 
 @mcp.tool()
 def describe_table(db_filename: str, table_name: str) -> dict[str, Any]:
-    """Return columns for a table using PRAGMA table_info."""
+    """Return columns for one table. Use when you need exact column details not already visible in the schema summary."""
     with _connect(db_filename) as conn:
         rows = conn.execute(f"PRAGMA table_info('{table_name}')").fetchall()
 
@@ -90,7 +90,7 @@ def describe_table(db_filename: str, table_name: str) -> dict[str, Any]:
 
 @mcp.tool()
 def get_foreign_keys(db_filename: str, table_name: str) -> list[dict[str, Any]]:
-    """Return foreign keys for a table using PRAGMA foreign_key_list."""
+    """Return foreign keys for a table. Use only when the join path is unclear."""
     with _connect(db_filename) as conn:
         rows = conn.execute(f"PRAGMA foreign_key_list('{table_name}')").fetchall()
         return [
@@ -109,7 +109,7 @@ def get_foreign_keys(db_filename: str, table_name: str) -> list[dict[str, Any]]:
 
 @mcp.tool()
 def sample_rows(db_filename: str, table_name: str, limit: int = 5) -> dict[str, Any]:
-    """Return a few sample rows from a table."""
+    """Return a few sample rows from a table. Use only when column semantics are unclear from names alone."""
     limit = max(1, min(limit, 20))
 
     with _connect(db_filename) as conn:
@@ -129,8 +129,8 @@ def sample_rows(db_filename: str, table_name: str, limit: int = 5) -> dict[str, 
 @mcp.tool()
 def run_sql_readonly(db_filename: str, sql: str, limit: int = 200) -> dict[str, Any]:
     """
-    Execute a read-only query and return rows.
-    FastAPI should validate first with sqlglot.
+    Preferred tool for answering user questions once you know the schema.
+    Execute one read-only SQLite SELECT/CTE query and return rows.
     """
     if not _is_readonly_sql(sql):
         raise ValueError("Only read-only SELECT/CTE queries are allowed")
