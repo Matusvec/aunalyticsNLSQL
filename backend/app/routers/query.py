@@ -3,10 +3,14 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from app.services.ask_service import ask_question_with_tools
+from app.services.ask_service import ask_question
 from app.services.ollama_service import generate_sql_from_question
+from app.services.sqlite_service import (
+    build_schema_summary_impl,
+    run_sql_readonly_impl,
+    validate_sql_compiles_impl,
+)
 from app.services.sql_validator import validate_readonly_sql
-from mcp_sqlite.db_utils import build_schema_summary_impl, run_sql_readonly_impl
 
 router = APIRouter()
 
@@ -32,10 +36,12 @@ async def generate_sql(payload: GenerateSQLRequest):
         result = await generate_sql_from_question(
             question=payload.question,
             schema_summary=schema_summary,
+            verifier=lambda sql: validate_sql_compiles_impl(payload.db_filename, sql),
         )
 
         # Validate before returning so the frontend only sees safe SQL proposals
         validate_readonly_sql(result.sql)
+        validate_sql_compiles_impl(payload.db_filename, result.sql)
 
         return {
             "db_filename": payload.db_filename,
@@ -57,7 +63,7 @@ async def generate_sql(payload: GenerateSQLRequest):
 @router.post("/ask")
 async def ask(payload: AskRequest):
     try:
-        result = await ask_question_with_tools(
+        result = await ask_question(
             question=payload.question,
             db_filename=payload.db_filename,
             limit=payload.limit,
@@ -84,6 +90,7 @@ async def ask(payload: AskRequest):
 def execute_query(payload: ExecuteQueryRequest):
     try:
         validate_readonly_sql(payload.sql)
+        validate_sql_compiles_impl(payload.db_filename, payload.sql)
         result = run_sql_readonly_impl(
             db_filename=payload.db_filename,
             sql=payload.sql,

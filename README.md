@@ -22,7 +22,7 @@ pip install -r requirements-dev.txt
 py -m pip install -r requirements-dev.txt
 ```
 
-Start the FastAPI app and the MCP server together:
+Start the FastAPI app:
 
 ```bash
 ./start_dev_services.sh
@@ -39,17 +39,13 @@ If you get an error in Powershell saying you can't execute scripts on your machi
 Set-ExecutionPolicy Unrestricted
 ```
 
-This starts:
-- the FastAPI app from `backend/app/main.py`
-- the MCP server from `backend/mcp_sqlite/server.py`
+This starts the FastAPI app from `backend/app/main.py`.
 
-When `MCP_TRANSPORT=streamable-http`, the MCP endpoint used by `/api/ask` is `http://127.0.0.1:8001/mcp` by default. You can override that with `MCP_SERVER_URL`.
-
-Press `Ctrl-C` to stop both processes.
+Press `Ctrl-C` to stop the service.
 
 ## Terminal Client
 
-With the backend running, you can use the terminal client to pick a database from `backend/db` and send natural-language questions to `POST /api/ask`. That route now lets Ollama choose MCP tools, execute them through the MCP server, and then produce a final answer with the tool result as context.
+With the backend running, you can use the terminal client to pick a database from `backend/db` and send natural-language questions to `POST /api/ask`. That route builds schema context from the selected SQLite database, asks Ollama for a read-only SQL query, validates it, executes it locally against SQLite, and returns raw results.
 
 Run it with:
 

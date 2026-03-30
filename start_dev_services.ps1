@@ -1,9 +1,6 @@
 param(
     [string]$AppHost = "127.0.0.1",
-    [int]$AppPort = 8000,
-    [string]$McpHost = "127.0.0.1",
-    [int]$McpPort = 8001,
-    [string]$McpTransport = "streamable-http"
+    [int]$AppPort = 8000
 )
 
 $ErrorActionPreference = "Stop"
@@ -37,90 +34,36 @@ function Find-PythonCommand {
 
 $pythonCommand = Find-PythonCommand
 $appProcess = $null
-$mcpProcess = $null
-$previousTransport = $null
-$previousHost = $null
-$previousPort = $null
 
 Push-Location $backendDir
 try {
-    & $pythonCommand -c "import uvicorn; import mcp.server.fastmcp; import mcp_sqlite.server" *> $null
+    & $pythonCommand -c "import uvicorn; import app.main" *> $null
     if ($LASTEXITCODE -ne 0) {
         throw "Required packages or local backend modules are not available for $pythonCommand. Install them with: $pythonCommand -m pip install -r requirements.txt"
     }
 
-    $previousTransport = $env:MCP_TRANSPORT
-    $previousHost = $env:MCP_HOST
-    $previousPort = $env:MCP_PORT
-
-    $env:MCP_TRANSPORT = $McpTransport
-    $env:MCP_HOST = $McpHost
-    $env:MCP_PORT = "$McpPort"
-
     $appProcess = Start-Process -FilePath $pythonCommand -ArgumentList @("-m", "uvicorn", "app.main:app", "--reload", "--host", $AppHost, "--port", "$AppPort") -WorkingDirectory $backendDir -NoNewWindow -PassThru
-    $mcpProcess = Start-Process -FilePath $pythonCommand -ArgumentList @("-m", "mcp_sqlite.server") -WorkingDirectory $backendDir -NoNewWindow -PassThru
 
     Write-Host "FastAPI app: http://$AppHost`:$AppPort"
-    if ($McpTransport -eq "streamable-http") {
-        Write-Host "MCP server:   http://$McpHost`:$McpPort/mcp ($McpTransport)"
-    }
-    else {
-        Write-Host "MCP server:   http://$McpHost`:$McpPort ($McpTransport)"
-    }
-    Write-Host "Press Ctrl-C to stop both services."
+    Write-Host "Press Ctrl-C to stop the service."
 
-    while (-not $appProcess.HasExited -and -not $mcpProcess.HasExited) {
+    while (-not $appProcess.HasExited) {
         Start-Sleep -Seconds 1
         $appProcess.Refresh()
-        $mcpProcess.Refresh()
     }
 
     $appProcess.Refresh()
-    $mcpProcess.Refresh()
-
-    if ($appProcess.HasExited -and -not $mcpProcess.HasExited) {
-        throw "FastAPI app exited unexpectedly."
-    }
-
-    if ($mcpProcess.HasExited -and -not $appProcess.HasExited) {
-        throw "MCP server exited unexpectedly."
-    }
 
     if ($appProcess.ExitCode -ne 0) {
         throw "FastAPI app stopped with exit code $($appProcess.ExitCode)."
     }
-
-    if ($mcpProcess.ExitCode -ne 0) {
-        throw "MCP server stopped with exit code $($mcpProcess.ExitCode)."
-    }
 }
 finally {
-    foreach ($process in @($appProcess, $mcpProcess)) {
+    foreach ($process in @($appProcess)) {
         if ($null -ne $process -and -not $process.HasExited) {
             Stop-Process -Id $process.Id -ErrorAction SilentlyContinue
             $process.WaitForExit()
         }
-    }
-
-    if ($null -ne $previousTransport) {
-        $env:MCP_TRANSPORT = $previousTransport
-    }
-    else {
-        Remove-Item Env:MCP_TRANSPORT -ErrorAction SilentlyContinue
-    }
-
-    if ($null -ne $previousHost) {
-        $env:MCP_HOST = $previousHost
-    }
-    else {
-        Remove-Item Env:MCP_HOST -ErrorAction SilentlyContinue
-    }
-
-    if ($null -ne $previousPort) {
-        $env:MCP_PORT = $previousPort
-    }
-    else {
-        Remove-Item Env:MCP_PORT -ErrorAction SilentlyContinue
     }
 
     Pop-Location

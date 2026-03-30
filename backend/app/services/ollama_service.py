@@ -1,18 +1,19 @@
 from __future__ import annotations
 
-import json
-
 import os
-from typing import Any, Literal, Optional
+from typing import Any, Callable, Optional
 
 import httpx
 from pydantic import BaseModel, Field, field_validator
+
+from app.services.sql_validator import normalize_readonly_sql, validate_readonly_sql
 
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
 OLLAMA_TAGS_URL = "http://localhost:11434/api/tags"
 DEFAULT_OLLAMA_MODEL = "qwen2.5-coder:3b"
 PREFERRED_OLLAMA_MODELS = ("qwen2.5-coder:3b", "llama3.2", "qwen3", "phi4", "gemma3")
+MAX_SQL_GENERATION_ATTEMPTS = 2
 _cached_ollama_model: Optional[str] = None
 _env_ollama_model = os.getenv("OLLAMA_MODEL")
 if _env_ollama_model:
@@ -40,42 +41,6 @@ class SQLGenerationResult(BaseModel):
         return value
 
 
-class AskNextStepResult(BaseModel):
-    action: Literal["call_tool", "respond"] = Field(
-        description="Choose whether to call one MCP tool next or answer the user directly."
-    )
-    answer: str = Field(
-        default="",
-        description="Natural-language answer for the user when action is respond. Otherwise empty.",
-    )
-    tool_name: str | None = Field(
-        default=None,
-        description="Exact MCP tool name to call when action is call_tool.",
-    )
-    tool_arguments: dict[str, Any] = Field(
-        default_factory=dict,
-        description="JSON arguments for the tool call when action is call_tool.",
-    )
-
-
-class AskDirectQueryResult(BaseModel):
-    action: Literal["call_tool", "needs_exploration", "respond"] = Field(
-        description="Usually call run_sql_readonly directly. Use needs_exploration only when schema summary is insufficient."
-    )
-    answer: str = Field(
-        default="",
-        description="Natural-language answer when action is respond. Otherwise empty.",
-    )
-    sql: str = Field(
-        default="",
-        description="SQLite read-only SQL to execute with run_sql_readonly when action is call_tool.",
-    )
-    rationale: str = Field(
-        default="",
-        description="Brief explanation of why a direct query is enough or why exploration is needed.",
-    )
-
-
 
 def build_sql_prompt(question: str, schema_summary: str) -> str:
     return f"""
@@ -85,6 +50,8 @@ Your job:
 - Convert the user's question into exactly one SQLite read-only query.
 - Only generate SELECT queries or WITH ... SELECT queries.
 - Never generate INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, or PRAGMA.
+- Return exactly one SQL statement.
+- Do not return multiple statements, comments, markdown fences, prose, or alternative query options.
 - Prefer simple, readable SQL.
 - Use LIMIT when the user asks for a small number of rows or when browsing data.
 - If the question is ambiguous, make the most reasonable assumption and list it in assumptions.
@@ -112,116 +79,35 @@ User question:
 """.strip()
 
 
-def build_ask_next_step_prompt(
-    *,
+def build_sql_repair_prompt(
     question: str,
-    db_filename: str,
-    limit: int,
     schema_summary: str,
-    tool_catalog: str,
-    tool_history: list[dict[str, Any]],
-) -> str:
-    history_json = json_dumps(tool_history)
-    return f"""
-You are an assistant that can answer database questions by deciding whether to call exactly one MCP tool at a time.
-
-Rules:
-- Your available tools are listed below. Only use those exact tool names.
-- Prefer tool calls whenever the answer depends on database contents, schema details, or query results.
-- You already have a schema summary below. If it is enough to write the SQL, skip schema-discovery tools and call `run_sql_readonly` directly.
-- For common analytical questions like "top customers", "total spending", counts, sums, averages, rankings, and grouped reports, prefer a single `run_sql_readonly` call.
-- Use `list_tables`, `describe_table`, `get_foreign_keys`, or `sample_rows` only when the schema summary is insufficient or ambiguous.
-- If you already have a successful `run_sql_readonly` result in tool history, respond to the user instead of calling another tool.
-- If you call `run_sql_readonly`, the SQL must be SQLite read-only SQL and should answer the user's question directly.
-- Include `{db_filename}` as `db_filename` for database tools unless it is already present.
-- Respect the row limit `{limit}` when using `run_sql_readonly` or `sample_rows`.
-- After you have enough tool context, respond in natural language and do not call another tool.
-- Never invent tool results.
-- Return JSON only and match the required schema exactly.
-
-Database:
-{db_filename}
-
-Schema summary:
-{schema_summary}
-
-Available tools:
-{tool_catalog}
-
-Previous tool history:
-{history_json}
-
-User question:
-{question}
-""".strip()
-
-
-def build_direct_query_prompt(
-    *,
-    question: str,
-    db_filename: str,
-    limit: int,
-    schema_summary: str,
+    previous_result: SQLGenerationResult,
+    validation_error: str,
 ) -> str:
     return f"""
-You are deciding the fastest safe way to answer a SQLite database question.
+The previous SQL output failed validation.
 
-Default behavior:
-- If the schema summary is enough, write one read-only SQLite query and choose `call_tool`.
-- Use `needs_exploration` only if the schema summary is too ambiguous to write a reasonable query.
-- Use `respond` only for greetings, meta questions, or cases where no database lookup is needed.
+Validation error:
+{validation_error}
 
-Rules for `call_tool`:
-- Produce exactly one SQLite SELECT or WITH ... SELECT query.
-- Prefer a single grouped/aggregated query for rankings, totals, counts, averages, trends, and top-N questions.
-- Add `LIMIT {limit}` when the user asks for a small number of rows like top 5.
-- Do not use schema-discovery tools if the schema summary already shows the needed tables and columns.
-- Return SQL only in the `sql` field, not markdown.
+You must fix the SQL and return JSON matching the required schema exactly.
 
-Database:
-{db_filename}
+Important:
+- Return exactly one SQLite read-only statement.
+- Do not return multiple statements.
+- Do not include comments, markdown fences, prose, or explanation outside the JSON fields.
+- Keep the same intent as the original user question.
 
-Schema summary:
+Database schema:
 {schema_summary}
 
 User question:
 {question}
+
+Previous JSON output:
+{previous_result.model_dump_json()}
 """.strip()
-
-
-def build_final_answer_prompt(
-    *,
-    question: str,
-    db_filename: str,
-    sql: str,
-    query_result: dict[str, Any],
-) -> str:
-    return f"""
-You are answering a user about a SQLite database.
-
-Use the executed SQL result below to answer clearly and concisely.
-- Do not invent facts not present in the result.
-- If rows are empty, say that no matching rows were found.
-- Mention the main takeaway first.
-- Keep the answer short and natural.
-
-Database:
-{db_filename}
-
-User question:
-{question}
-
-SQL used:
-{sql}
-
-Query result:
-{json_dumps(query_result)}
-""".strip()
-
-
-def json_dumps(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, indent=2)
-
 
 async def resolve_ollama_model(client: httpx.AsyncClient) -> Optional[str]:
     global _cached_ollama_model
@@ -248,158 +134,69 @@ async def resolve_ollama_model(client: httpx.AsyncClient) -> Optional[str]:
     return _cached_ollama_model
 
 
-async def generate_sql_from_question(question: str, schema_summary: str) -> SQLGenerationResult:
+async def _request_sql_generation(
+    client: httpx.AsyncClient,
+    model: str,
+    prompt: str,
+) -> SQLGenerationResult:
+    payload: dict[str, Any] = {
+        "model": model,
+        "stream": False,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You generate safe SQLite read-only SQL. "
+                    "Return only data that matches the provided JSON schema."
+                ),
+            },
+            {
+                "role": "user",
+                "content": prompt,
+            },
+        ],
+        "format": SQLGenerationResult.model_json_schema(),
+    }
+    response = await client.post(OLLAMA_URL, json=payload)
+    response.raise_for_status()
+    data = response.json()
+    content = data["message"]["content"]
+    return SQLGenerationResult.model_validate_json(content)
+
+
+def _normalize_and_verify_generation(
+    result: SQLGenerationResult,
+    verifier: Callable[[str], None] | None = None,
+) -> SQLGenerationResult:
+    normalized_sql = normalize_readonly_sql(result.sql.strip())
+    validate_readonly_sql(normalized_sql)
+    if verifier is not None:
+        verifier(normalized_sql)
+    return result.model_copy(update={"sql": normalized_sql})
+
+
+async def generate_sql_from_question(
+    question: str,
+    schema_summary: str,
+    verifier: Callable[[str], None] | None = None,
+) -> SQLGenerationResult:
     prompt = build_sql_prompt(question=question, schema_summary=schema_summary)
 
     async with httpx.AsyncClient(timeout=120.0) as client:
         model = await resolve_ollama_model(client)
-        payload: dict[str, Any] = {
-            "model": model,
-            "stream": False,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": (
-                        "You generate safe SQLite read-only SQL. "
-                        "Return only data that matches the provided JSON schema."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": prompt,
-                },
-            ],
-            "format": SQLGenerationResult.model_json_schema(),
-        }
-        response = await client.post(OLLAMA_URL, json=payload)
-        response.raise_for_status()
-        data = response.json()
+        last_error: ValueError | None = None
+        for _ in range(MAX_SQL_GENERATION_ATTEMPTS):
+            result = await _request_sql_generation(client=client, model=model, prompt=prompt)
+            try:
+                return _normalize_and_verify_generation(result, verifier=verifier)
+            except ValueError as exc:
+                last_error = exc
+                prompt = build_sql_repair_prompt(
+                    question=question,
+                    schema_summary=schema_summary,
+                    previous_result=result,
+                    validation_error=str(exc),
+                )
 
-    # Ollama returns the model output in message.content for /api/chat
-    content = data["message"]["content"]
-
-    # Validate the model output against the Pydantic schema
-    return SQLGenerationResult.model_validate_json(content)
-
-
-async def choose_ask_next_step(
-    *,
-    question: str,
-    db_filename: str,
-    limit: int,
-    schema_summary: str,
-    tool_catalog: str,
-    tool_history: list[dict[str, Any]],
-) -> AskNextStepResult:
-    prompt = build_ask_next_step_prompt(
-        question=question,
-        db_filename=db_filename,
-        limit=limit,
-        schema_summary=schema_summary,
-        tool_catalog=tool_catalog,
-        tool_history=tool_history,
-    )
-
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        model = await resolve_ollama_model(client)
-        payload: dict[str, Any] = {
-            "model": model,
-            "stream": False,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a cautious database assistant. "
-                        "Return only valid JSON that matches the provided schema."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": prompt,
-                },
-            ],
-            "format": AskNextStepResult.model_json_schema(),
-        }
-        response = await client.post(OLLAMA_URL, json=payload)
-        response.raise_for_status()
-        data = response.json()
-
-    return AskNextStepResult.model_validate_json(data["message"]["content"])
-
-
-async def choose_direct_query_step(
-    *,
-    question: str,
-    db_filename: str,
-    limit: int,
-    schema_summary: str,
-) -> AskDirectQueryResult:
-    prompt = build_direct_query_prompt(
-        question=question,
-        db_filename=db_filename,
-        limit=limit,
-        schema_summary=schema_summary,
-    )
-
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        model = await resolve_ollama_model(client)
-        payload: dict[str, Any] = {
-            "model": model,
-            "stream": False,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a careful SQLite analyst. "
-                        "Prefer a single direct query when possible and return only valid JSON."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": prompt,
-                },
-            ],
-            "format": AskDirectQueryResult.model_json_schema(),
-        }
-        response = await client.post(OLLAMA_URL, json=payload)
-        response.raise_for_status()
-        data = response.json()
-
-    return AskDirectQueryResult.model_validate_json(data["message"]["content"])
-
-
-async def summarize_answer_from_query_result(
-    *,
-    question: str,
-    db_filename: str,
-    sql: str,
-    query_result: dict[str, Any],
-) -> str:
-    prompt = build_final_answer_prompt(
-        question=question,
-        db_filename=db_filename,
-        sql=sql,
-        query_result=query_result,
-    )
-
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        model = await resolve_ollama_model(client)
-        payload: dict[str, Any] = {
-            "model": model,
-            "stream": False,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": "You answer using only the provided SQL result context.",
-                },
-                {
-                    "role": "user",
-                    "content": prompt,
-                },
-            ],
-        }
-        response = await client.post(OLLAMA_URL, json=payload)
-        response.raise_for_status()
-        data = response.json()
-
-    return data["message"]["content"].strip()
+        assert last_error is not None
+        raise last_error

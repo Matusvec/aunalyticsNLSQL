@@ -4,7 +4,8 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-DB_DIR = Path(__file__).resolve().parents[1] / "db"
+
+DB_DIR = Path(__file__).resolve().parents[2] / "db"
 
 
 def safe_db_path(db_filename: str) -> Path:
@@ -28,13 +29,15 @@ def connect(db_filename: str) -> sqlite3.Connection:
 
 def list_tables_impl(db_filename: str) -> list[str]:
     with connect(db_filename) as conn:
-        rows = conn.execute("""
+        rows = conn.execute(
+            """
             SELECT name
             FROM sqlite_master
             WHERE type = 'table'
               AND name NOT LIKE 'sqlite_%'
             ORDER BY name
-        """).fetchall()
+            """
+        ).fetchall()
         return [row["name"] for row in rows]
 
 
@@ -73,7 +76,19 @@ def run_sql_readonly_impl(db_filename: str, sql: str, limit: int = 200) -> dict[
             "row_count": len(rows),
             "limit_applied": limit,
         }
-    
+
+
+def validate_sql_compiles_impl(db_filename: str, sql: str) -> None:
+    """
+    Ask SQLite to compile the query so missing tables/columns fail before runtime.
+    """
+    with connect(db_filename) as conn:
+        try:
+            conn.execute(f"EXPLAIN QUERY PLAN {sql}")
+        except sqlite3.Error as exc:
+            raise ValueError(str(exc)) from exc
+
+
 def build_schema_summary_impl(db_filename: str) -> str:
     tables = list_tables_impl(db_filename)
     parts: list[str] = []

@@ -11,6 +11,7 @@ import httpx
 API_URL = "http://127.0.0.1:8000/api/ask"
 DB_DIR = Path(__file__).resolve().parent / "backend" / "db"
 EXIT_COMMANDS = {"q", "quit", "exit"}
+FLOAT_PRECISION = 2
 
 
 def list_databases() -> list[str]:
@@ -46,30 +47,18 @@ def ask_question(client: httpx.Client, db_filename: str, question: str) -> dict:
     return response.json()
 
 
+def round_floats(value):
+    if isinstance(value, float):
+        return round(value, FLOAT_PRECISION)
+    if isinstance(value, list):
+        return [round_floats(item) for item in value]
+    if isinstance(value, dict):
+        return {key: round_floats(item) for key, item in value.items()}
+    return value
+
+
 def print_response(result: dict) -> None:
-    sql = result.get("sql")
-    rows = result.get("rows") or []
-    columns = result.get("columns") or []
-    row_count = result.get("row_count")
-
-    if sql:
-        print("SQL:")
-        print(sql)
-    else:
-        print("SQL:")
-        print("<none>")
-
-    if row_count is not None:
-        print(f"\nRows returned: {row_count}")
-
-    if columns:
-        print(f"Columns: {json.dumps(columns, ensure_ascii=False)}")
-
-    print("Rows:")
-    if rows:
-        print(json.dumps(rows, indent=2, ensure_ascii=False))
-    else:
-        print("[]")
+    print(json.dumps(round_floats(result), indent=2, ensure_ascii=False))
 
 
 def main() -> int:
