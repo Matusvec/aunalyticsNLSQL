@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
-from mcp_sqlite.db_utils import list_tables_impl, describe_table_impl, build_schema_summary_impl
+from app.services.sqlite_service import list_tables_impl, describe_table_impl, build_schema_summary_impl
 
 router = APIRouter()
 

@@ -6,9 +6,6 @@ BACKEND_DIR="$ROOT_DIR/backend"
 
 APP_HOST="${APP_HOST:-127.0.0.1}"
 APP_PORT="${APP_PORT:-8000}"
-MCP_HOST="${MCP_HOST:-127.0.0.1}"
-MCP_PORT="${MCP_PORT:-8001}"
-MCP_TRANSPORT="${MCP_TRANSPORT:-streamable-http}"
 
 PYTHON_CMD=()
 
@@ -58,7 +55,7 @@ fi
 
 cd "$BACKEND_DIR"
 
-if ! "${PYTHON_CMD[@]}" -c "import uvicorn; import mcp.server.fastmcp; import mcp_sqlite.server" >/dev/null 2>&1; then
+if ! "${PYTHON_CMD[@]}" -c "import uvicorn; import app.main" >/dev/null 2>&1; then
   echo "Required packages or local backend modules are not available for ${PYTHON_CMD[*]}." >&2
   echo "Install the app requirements first, for example:" >&2
   echo "  ${PYTHON_CMD[*]} -m pip install -r requirements.txt" >&2
@@ -71,14 +68,11 @@ cleanup() {
   if [[ -n "${APP_PID:-}" ]]; then
     kill "$APP_PID" 2>/dev/null || true
   fi
-  if [[ -n "${MCP_PID:-}" ]]; then
-    kill "$MCP_PID" 2>/dev/null || true
-  fi
   wait 2>/dev/null || true
   if [[ "$exit_code" -eq 0 || "$exit_code" -eq 130 || "$exit_code" -eq 143 ]]; then
-    echo "FastAPI app and MCP server shut down cleanly."
+    echo "FastAPI app shut down cleanly."
   else
-    echo "FastAPI app and MCP server stopped with exit code $exit_code." >&2
+    echo "FastAPI app stopped with exit code $exit_code." >&2
   fi
   exit "$exit_code"
 }
@@ -102,16 +96,7 @@ trap cleanup EXIT INT TERM
 "${PYTHON_CMD[@]}" -m uvicorn app.main:app --reload --host "$APP_HOST" --port "$APP_PORT" &
 APP_PID=$!
 
-MCP_TRANSPORT="$MCP_TRANSPORT" MCP_HOST="$MCP_HOST" MCP_PORT="$MCP_PORT" \
-  "${PYTHON_CMD[@]}" -m mcp_sqlite.server &
-MCP_PID=$!
-
 echo "FastAPI app: http://$APP_HOST:$APP_PORT"
-if [[ "$MCP_TRANSPORT" == "streamable-http" ]]; then
-  echo "MCP server:   http://$MCP_HOST:$MCP_PORT/mcp ($MCP_TRANSPORT)"
-else
-echo "MCP server:   http://$MCP_HOST:$MCP_PORT ($MCP_TRANSPORT)"
-fi
-echo "Press Ctrl-C to stop both services."
+echo "Press Ctrl-C to stop the service."
 
-wait_for_first_exit "$APP_PID" "$MCP_PID"
+wait_for_first_exit "$APP_PID"

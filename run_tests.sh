@@ -35,4 +35,4 @@ if ! "$PYTHON_BIN" -c "import pytest" >/dev/null 2>&1; then
 fi
 
 cd "$ROOT_DIR"
-exec "$PYTHON_BIN" -m pytest -v -rP backend/tests/test_ask_route.py "$@"
+exec "$PYTHON_BIN" -m pytest -v -rA backend/tests "$@"
