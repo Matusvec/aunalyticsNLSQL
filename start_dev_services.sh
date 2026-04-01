@@ -50,4 +50,4 @@ echo "FastAPI app: http://$APP_HOST:$APP_PORT"
 echo "MCP server:   http://$MCP_HOST:$MCP_PORT ($MCP_TRANSPORT)"
 echo "Press Ctrl-C to stop both services."
 
-wait -n "$APP_PID" "$MCP_PID"
+wait "$APP_PID" "$MCP_PID"

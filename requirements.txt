@@ -10,3 +10,7 @@ mcp==1.26.0
 
 # Local Ollama chat client
 ollama==0.6.1
+
+#File upload endpt reqs
+pandas==2.2.3
+python-multipart==0.0.9
