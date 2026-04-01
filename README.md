@@ -69,6 +69,30 @@ The client will:
 
 Type `quit`, `exit`, or `q` to leave the client.
 
+## Frontend Results Table Component
+
+A reusable React component is available at `frontend/src/components/ResultsTable.tsx`.
+
+It is designed to render the `/api/ask` response with:
+- confidence near the top (when present)
+- model assumptions (when present)
+- generated SQL in a code block
+- a table for `columns` and `rows`
+- the exact empty state text: `No results found.`
+
+Basic usage:
+
+```tsx
+import { ResultsTable } from "./components/ResultsTable";
+
+function Page({ askResponse }: { askResponse: any }) {
+	return <ResultsTable result={askResponse} />;
+}
+```
+
+An example fetch-and-render container is provided at
+`frontend/src/components/ResultsTableExample.tsx`.
+
 
 ## Testing `/api/ask`
 
