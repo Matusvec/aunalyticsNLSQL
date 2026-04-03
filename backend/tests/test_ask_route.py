@@ -14,6 +14,7 @@ if str(BACKEND_DIR) not in sys.path:
 
 from app.main import app
 from app.routers import query as query_router
+from app.services.ollama_service import OllamaServiceError
 client = TestClient(app)
 
 
@@ -108,3 +109,15 @@ def test_ask_returns_500_when_tool_flow_fails(monkeypatch: pytest.MonkeyPatch) -
 
     assert response.status_code == 500
     assert "Connection refused" in response.json()["detail"]
+
+
+def test_ask_returns_503_when_ollama_is_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_ask_question_with_tools(question: str, db_filename: str, limit: int):
+        raise OllamaServiceError("Ollama request failed at http://localhost:11434/api/chat: 404 Not Found")
+
+    monkeypatch.setattr(query_router, "ask_question_with_tools", fake_ask_question_with_tools)
+
+    response = _post_ask("unused")
+
+    assert response.status_code == 503
+    assert "Ollama request failed" in response.json()["detail"]

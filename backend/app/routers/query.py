@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from app.services.ask_service import ask_question_with_tools
-from app.services.ollama_service import generate_sql_from_question
+from app.services.ollama_service import OllamaServiceError, generate_sql_from_question
 from app.services.sql_validator import validate_readonly_sql
 from mcp_sqlite.db_utils import build_schema_summary_impl, run_sql_readonly_impl
 
@@ -50,6 +50,8 @@ async def generate_sql(payload: GenerateSQLRequest):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except OllamaServiceError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"SQL generation failed: {exc}") from exc
 
@@ -66,16 +68,20 @@ async def ask(payload: AskRequest):
         return {
             "db_filename": payload.db_filename,
             "question": payload.question,
+            "answer": result.answer,
             "sql": result.sql,
             "columns": result.columns,
             "rows": result.rows,
             "row_count": result.row_count,
             "limit_applied": result.limit_applied,
+            "tool_calls": [trace.model_dump() for trace in result.tool_calls],
         }
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except OllamaServiceError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Ask failed: {exc}") from exc
 

@@ -19,6 +19,10 @@ if _env_ollama_model:
     _cached_ollama_model = _env_ollama_model
 
 
+class OllamaServiceError(RuntimeError):
+    """Raised when Ollama cannot be reached or returns an invalid response."""
+
+
 class SQLGenerationResult(BaseModel):
     sql: str = Field(description="A single read-only SQLite SELECT query")
     assumptions: list[str] = Field(
@@ -251,35 +255,41 @@ async def resolve_ollama_model(client: httpx.AsyncClient) -> Optional[str]:
 async def generate_sql_from_question(question: str, schema_summary: str) -> SQLGenerationResult:
     prompt = build_sql_prompt(question=question, schema_summary=schema_summary)
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        model = await resolve_ollama_model(client)
-        payload: dict[str, Any] = {
-            "model": model,
-            "stream": False,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": (
-                        "You generate safe SQLite read-only SQL. "
-                        "Return only data that matches the provided JSON schema."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": prompt,
-                },
-            ],
-            "format": SQLGenerationResult.model_json_schema(),
-        }
-        response = await client.post(OLLAMA_URL, json=payload)
-        response.raise_for_status()
-        data = response.json()
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            model = await resolve_ollama_model(client)
+            payload: dict[str, Any] = {
+                "model": model,
+                "stream": False,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You generate safe SQLite read-only SQL. "
+                            "Return only data that matches the provided JSON schema."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt,
+                    },
+                ],
+                "format": SQLGenerationResult.model_json_schema(),
+            }
+            response = await client.post(OLLAMA_URL, json=payload)
+            response.raise_for_status()
+            data = response.json()
+    except (httpx.HTTPError, KeyError, json.JSONDecodeError, ValueError) as exc:
+        raise OllamaServiceError(f"Ollama request failed at {OLLAMA_URL}: {exc}") from exc
 
     # Ollama returns the model output in message.content for /api/chat
     content = data["message"]["content"]
 
     # Validate the model output against the Pydantic schema
-    return SQLGenerationResult.model_validate_json(content)
+    try:
+        return SQLGenerationResult.model_validate_json(content)
+    except ValueError as exc:
+        raise OllamaServiceError(f"Ollama returned invalid SQL payload: {exc}") from exc
 
 
 async def choose_ask_next_step(
@@ -300,31 +310,34 @@ async def choose_ask_next_step(
         tool_history=tool_history,
     )
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        model = await resolve_ollama_model(client)
-        payload: dict[str, Any] = {
-            "model": model,
-            "stream": False,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a cautious database assistant. "
-                        "Return only valid JSON that matches the provided schema."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": prompt,
-                },
-            ],
-            "format": AskNextStepResult.model_json_schema(),
-        }
-        response = await client.post(OLLAMA_URL, json=payload)
-        response.raise_for_status()
-        data = response.json()
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            model = await resolve_ollama_model(client)
+            payload: dict[str, Any] = {
+                "model": model,
+                "stream": False,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a cautious database assistant. "
+                            "Return only valid JSON that matches the provided schema."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt,
+                    },
+                ],
+                "format": AskNextStepResult.model_json_schema(),
+            }
+            response = await client.post(OLLAMA_URL, json=payload)
+            response.raise_for_status()
+            data = response.json()
 
-    return AskNextStepResult.model_validate_json(data["message"]["content"])
+        return AskNextStepResult.model_validate_json(data["message"]["content"])
+    except (httpx.HTTPError, KeyError, json.JSONDecodeError, ValueError) as exc:
+        raise OllamaServiceError(f"Ollama ask-step request failed at {OLLAMA_URL}: {exc}") from exc
 
 
 async def choose_direct_query_step(
@@ -341,31 +354,34 @@ async def choose_direct_query_step(
         schema_summary=schema_summary,
     )
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        model = await resolve_ollama_model(client)
-        payload: dict[str, Any] = {
-            "model": model,
-            "stream": False,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a careful SQLite analyst. "
-                        "Prefer a single direct query when possible and return only valid JSON."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": prompt,
-                },
-            ],
-            "format": AskDirectQueryResult.model_json_schema(),
-        }
-        response = await client.post(OLLAMA_URL, json=payload)
-        response.raise_for_status()
-        data = response.json()
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            model = await resolve_ollama_model(client)
+            payload: dict[str, Any] = {
+                "model": model,
+                "stream": False,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a careful SQLite analyst. "
+                            "Prefer a single direct query when possible and return only valid JSON."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt,
+                    },
+                ],
+                "format": AskDirectQueryResult.model_json_schema(),
+            }
+            response = await client.post(OLLAMA_URL, json=payload)
+            response.raise_for_status()
+            data = response.json()
 
-    return AskDirectQueryResult.model_validate_json(data["message"]["content"])
+        return AskDirectQueryResult.model_validate_json(data["message"]["content"])
+    except (httpx.HTTPError, KeyError, json.JSONDecodeError, ValueError) as exc:
+        raise OllamaServiceError(f"Ollama direct-query request failed at {OLLAMA_URL}: {exc}") from exc
 
 
 async def summarize_answer_from_query_result(
@@ -382,24 +398,27 @@ async def summarize_answer_from_query_result(
         query_result=query_result,
     )
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        model = await resolve_ollama_model(client)
-        payload: dict[str, Any] = {
-            "model": model,
-            "stream": False,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": "You answer using only the provided SQL result context.",
-                },
-                {
-                    "role": "user",
-                    "content": prompt,
-                },
-            ],
-        }
-        response = await client.post(OLLAMA_URL, json=payload)
-        response.raise_for_status()
-        data = response.json()
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            model = await resolve_ollama_model(client)
+            payload: dict[str, Any] = {
+                "model": model,
+                "stream": False,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "You answer using only the provided SQL result context.",
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt,
+                    },
+                ],
+            }
+            response = await client.post(OLLAMA_URL, json=payload)
+            response.raise_for_status()
+            data = response.json()
 
-    return data["message"]["content"].strip()
+        return data["message"]["content"].strip()
+    except (httpx.HTTPError, KeyError, json.JSONDecodeError, ValueError) as exc:
+        raise OllamaServiceError(f"Ollama summarize request failed at {OLLAMA_URL}: {exc}") from exc

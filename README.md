@@ -93,6 +93,27 @@ function Page({ askResponse }: { askResponse: any }) {
 An example fetch-and-render container is provided at
 `frontend/src/components/ResultsTableExample.tsx`.
 
+## Running the Frontend Demo
+
+A runnable React demo app is scaffolded in `frontend-app`.
+
+1. Start backend services from the repo root:
+
+```powershell
+.\start_dev_services.ps1
+```
+
+2. In a second terminal, start the frontend:
+
+```powershell
+cd .\frontend-app
+npm run dev
+```
+
+3. Open `http://localhost:5173`.
+
+The frontend proxies `/api/*` to `http://127.0.0.1:8000`, so `ResultsTableExample` can call `/api/ask` directly.
+
 
 ## Testing `/api/ask`
 
