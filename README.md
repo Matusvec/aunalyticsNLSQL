@@ -2,6 +2,13 @@
 
 ## Development
 
+Create and activate a virtual environment in zsh:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
 Install app requirements:
 
 ```bash
