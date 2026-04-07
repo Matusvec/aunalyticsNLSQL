@@ -5,3 +5,4 @@
 __pycache__/
 *.py[cod]
 .codex
+backend/db/query_history.sqlite

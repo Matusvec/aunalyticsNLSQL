@@ -15,6 +15,7 @@ from app.services.sql_validator import normalize_readonly_sql, validate_readonly
 
 class AskResult(BaseModel):
     sql: str
+    confidence: float | None = None
     columns: list[str] = Field(default_factory=list)
     rows: list[dict[str, Any]] = Field(default_factory=list)
     row_count: int = 0
@@ -41,6 +42,7 @@ async def ask_question(question: str, db_filename: str, limit: int = 200) -> Ask
 
     return AskResult(
         sql=sql,
+        confidence=generated.confidence,
         columns=query_result.get("columns", []),
         rows=query_result.get("rows", []),
         row_count=query_result.get("row_count", 0),
