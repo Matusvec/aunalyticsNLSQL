@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import logging
 import os
+import re
+import time
 from typing import Any, Callable, Optional
 
 import httpx
@@ -12,8 +15,11 @@ from app.services.sql_validator import normalize_readonly_sql, validate_readonly
 OLLAMA_URL = "http://localhost:11434/api/chat"
 OLLAMA_TAGS_URL = "http://localhost:11434/api/tags"
 DEFAULT_OLLAMA_MODEL = "qwen2.5-coder:3b"
-PREFERRED_OLLAMA_MODELS = ("qwen2.5-coder:3b", "llama3.2", "qwen3", "phi4", "gemma3")
+PREFERRED_OLLAMA_MODELS = ("qwen2.5-coder:3b", "phi3", "qwen3", "llama3.2", "gemma3")
+SQL_GENERATION_ATTEMPT_TIMEOUTS_SECONDS = (45.0, 180.0)
 MAX_SQL_GENERATION_ATTEMPTS = 2
+logger = logging.getLogger(__name__)
+ALIASED_COLUMN_ERROR_RE = re.compile(r"no such column:\s*([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)", re.IGNORECASE)
 _cached_ollama_model: Optional[str] = None
 _env_ollama_model = os.getenv("OLLAMA_MODEL")
 if _env_ollama_model:
@@ -41,6 +47,14 @@ class SQLGenerationResult(BaseModel):
         return value
 
 
+class SQLGenerationAttempt(BaseModel):
+    attempt_number: int
+    previous_sql: str
+    error: str
+
+
+class SQLGenerationError(RuntimeError):
+    pass
 
 def build_sql_prompt(question: str, schema_summary: str) -> str:
     return f"""
@@ -51,11 +65,45 @@ Your job:
 - Only generate SELECT queries or WITH ... SELECT queries.
 - Never generate INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, or PRAGMA.
 - Return exactly one SQL statement.
+- Use only tables and columns shown in the schema summary.
+- If a table name is not listed in the schema summary, it does not exist.
+- Table aliases do not create new columns.
+- Every alias.column reference must use a real column from the aliased table.
 - Do not return multiple statements, comments, markdown fences, prose, or alternative query options.
 - Prefer simple, readable SQL.
+- Prefer a single SELECT with explicit JOIN clauses over a CTE when both are valid.
+- Prefer short table aliases when they improve readability.
+- Format SQL clearly with one major clause per line and one JOIN per line.
+- Put ORDER BY before LIMIT.
 - Use LIMIT when the user asks for a small number of rows or when browsing data.
 - If the question is ambiguous, make the most reasonable assumption and list it in assumptions.
 - Output must match the required JSON schema exactly.
+
+Preferred style example:
+SELECT
+    c.CustomerId,
+    c.FirstName || ' ' || c.LastName AS CustomerName,
+    c.Country,
+    SUM(ii.UnitPrice * ii.Quantity) AS TotalSpentOnRock,
+    SUM(ii.Quantity) AS RockTracksPurchased
+FROM customers c
+JOIN invoices i
+    ON c.CustomerId = i.CustomerId
+JOIN invoice_items ii
+    ON i.InvoiceId = ii.InvoiceId
+JOIN tracks t
+    ON ii.TrackId = t.TrackId
+ORDER BY TotalSpentOnRock DESC
+LIMIT 5
+
+Strict alias and column rules:
+- Each alias must refer to exactly one table from the FROM or JOIN clause.
+- Each alias.column reference must use a real column from that alias's exact table only.
+- Never invent columns, even if a name seems likely.
+- Never borrow a column from a different joined table.
+- SELECT aliases are not source columns and cannot be used as if they belong to a table.
+- Before outputting SQL, validate every alias.column reference against the schema summary.
+- If a referenced column does not exist on that aliased table, rewrite the query or choose a different join path. Never guess.
 
 Assumptions Rules:
 - If the user's wording is ambiguous, list the assumptions you made.
@@ -79,35 +127,58 @@ User question:
 """.strip()
 
 
+def format_attempt_feedback(attempt: SQLGenerationAttempt) -> str:
+    parts = [f"Attempt {attempt.attempt_number} failed."]
+    if attempt.previous_sql:
+        parts.append(f"Last SQL: {attempt.previous_sql}")
+    parts.append(f"Error: {attempt.error}")
+    return "\n".join(parts)
+
+
 def build_sql_repair_prompt(
     question: str,
     schema_summary: str,
-    previous_result: SQLGenerationResult,
-    validation_error: str,
+    attempt_feedback: SQLGenerationAttempt,
 ) -> str:
+    error_guidance = build_error_specific_guidance(attempt_feedback.error)
     return f"""
-The previous SQL output failed validation.
+Fix the failed SQL and return JSON matching the required schema exactly.
 
-Validation error:
-{validation_error}
+{format_attempt_feedback(attempt_feedback)}
 
-You must fix the SQL and return JSON matching the required schema exactly.
+{error_guidance}
 
 Important:
 - Return exactly one SQLite read-only statement.
-- Do not return multiple statements.
-- Do not include comments, markdown fences, prose, or explanation outside the JSON fields.
-- Keep the same intent as the original user question.
+- Keep the same intent as the user question.
+- Use only tables and columns shown in the schema summary.
+- Correct the specific mistake shown in the error.
+- Do not repeat the same failure.
+- Take enough time to verify table names, aliases, and column names against the schema summary before answering.
+- Prefer a single SELECT with explicit JOIN clauses over a CTE when both are valid.
+- Keep the SQL readable and well-structured, with one JOIN per line and ORDER BY before LIMIT.
 
 Database schema:
 {schema_summary}
 
 User question:
 {question}
-
-Previous JSON output:
-{previous_result.model_dump_json()}
 """.strip()
+
+
+def build_error_specific_guidance(error_message: str) -> str:
+    match = ALIASED_COLUMN_ERROR_RE.search(error_message)
+    if not match:
+        return "Failure-specific guidance:\n- Use only real table and column names from the schema summary."
+
+    alias_name, column_name = match.groups()
+    return (
+        "Failure-specific guidance:\n"
+        f"- `{alias_name}.{column_name}` is invalid.\n"
+        "- A table alias does not create or rename columns.\n"
+        "- If you use an alias, every `alias.column` reference must map to a real column on that table.\n"
+        "- Re-check the schema summary and replace the bad alias column with a real column name."
+    )
 
 async def resolve_ollama_model(client: httpx.AsyncClient) -> Optional[str]:
     global _cached_ollama_model
@@ -138,6 +209,7 @@ async def _request_sql_generation(
     client: httpx.AsyncClient,
     model: str,
     prompt: str,
+    timeout_seconds: float,
 ) -> SQLGenerationResult:
     payload: dict[str, Any] = {
         "model": model,
@@ -157,7 +229,11 @@ async def _request_sql_generation(
         ],
         "format": SQLGenerationResult.model_json_schema(),
     }
-    response = await client.post(OLLAMA_URL, json=payload)
+    response = await client.post(
+        OLLAMA_URL,
+        json=payload,
+        timeout=timeout_seconds,
+    )
     response.raise_for_status()
     data = response.json()
     content = data["message"]["content"]
@@ -174,7 +250,6 @@ def _normalize_and_verify_generation(
         verifier(normalized_sql)
     return result.model_copy(update={"sql": normalized_sql})
 
-
 async def generate_sql_from_question(
     question: str,
     schema_summary: str,
@@ -182,20 +257,79 @@ async def generate_sql_from_question(
 ) -> SQLGenerationResult:
     prompt = build_sql_prompt(question=question, schema_summary=schema_summary)
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    async with httpx.AsyncClient(timeout=max(SQL_GENERATION_ATTEMPT_TIMEOUTS_SECONDS)) as client:
         model = await resolve_ollama_model(client)
         last_error: ValueError | None = None
-        for _ in range(MAX_SQL_GENERATION_ATTEMPTS):
-            result = await _request_sql_generation(client=client, model=model, prompt=prompt)
+        for attempt_number in range(1, MAX_SQL_GENERATION_ATTEMPTS + 1):
+            attempt_started = time.perf_counter()
+            timeout_seconds = SQL_GENERATION_ATTEMPT_TIMEOUTS_SECONDS[attempt_number - 1]
             try:
-                return _normalize_and_verify_generation(result, verifier=verifier)
-            except ValueError as exc:
-                last_error = exc
+                result = await _request_sql_generation(
+                    client=client,
+                    model=model,
+                    prompt=prompt,
+                    timeout_seconds=timeout_seconds,
+                )
+            except httpx.TimeoutException as exc:
+                elapsed_seconds = time.perf_counter() - attempt_started
+                logger.warning(
+                    "SQL generation timed out on attempt %s/%s after %.2fs for question=%r",
+                    attempt_number,
+                    MAX_SQL_GENERATION_ATTEMPTS,
+                    elapsed_seconds,
+                    question,
+                )
+                if attempt_number == MAX_SQL_GENERATION_ATTEMPTS:
+                    raise SQLGenerationError(
+                        "SQL generation timed out after "
+                        f"{timeout_seconds:.0f}s on attempt "
+                        f"{attempt_number} of {MAX_SQL_GENERATION_ATTEMPTS}"
+                    ) from exc
                 prompt = build_sql_repair_prompt(
                     question=question,
                     schema_summary=schema_summary,
-                    previous_result=result,
-                    validation_error=str(exc),
+                    attempt_feedback=SQLGenerationAttempt(
+                        attempt_number=attempt_number,
+                        previous_sql="",
+                        error=f"Timed out after {timeout_seconds:.0f}s before producing SQL",
+                    ),
+                )
+                continue
+            except httpx.HTTPError as exc:
+                elapsed_seconds = time.perf_counter() - attempt_started
+                logger.exception(
+                    "SQL generation HTTP error on attempt %s/%s after %.2fs for question=%r",
+                    attempt_number,
+                    MAX_SQL_GENERATION_ATTEMPTS,
+                    elapsed_seconds,
+                    question,
+                )
+                message = str(exc).strip() or exc.__class__.__name__
+                raise SQLGenerationError(
+                    "SQL generation request failed on attempt "
+                    f"{attempt_number} of {MAX_SQL_GENERATION_ATTEMPTS}: {message}"
+                ) from exc
+            try:
+                return _normalize_and_verify_generation(result, verifier=verifier)
+            except ValueError as exc:
+                elapsed_seconds = time.perf_counter() - attempt_started
+                last_error = exc
+                logger.info(
+                    "SQL generation attempt %s/%s failed verification after %.2fs for question=%r: %s",
+                    attempt_number,
+                    MAX_SQL_GENERATION_ATTEMPTS,
+                    elapsed_seconds,
+                    question,
+                    exc,
+                )
+                prompt = build_sql_repair_prompt(
+                    question=question,
+                    schema_summary=schema_summary,
+                    attempt_feedback=SQLGenerationAttempt(
+                        attempt_number=attempt_number,
+                        previous_sql=result.sql.strip(),
+                        error=str(exc),
+                    ),
                 )
 
         assert last_error is not None

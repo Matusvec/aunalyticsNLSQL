@@ -1,18 +1,22 @@
 from __future__ import annotations
 
+import logging
+
+import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from app.services.ask_service import ask_question
-from app.services.ollama_service import generate_sql_from_question
+from app.services.ollama_service import SQLGenerationError, generate_sql_from_question
 from app.services.sqlite_service import (
-    build_schema_summary_impl,
+    build_relevant_schema_summary_impl,
     run_sql_readonly_impl,
     validate_sql_compiles_impl,
 )
 from app.services.sql_validator import validate_readonly_sql
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 class GenerateSQLRequest(BaseModel):
     db_filename: str = Field(..., examples=["chinook.sqlite"])
@@ -28,10 +32,15 @@ class AskRequest(BaseModel):
     question: str = Field(..., examples=["Show the top 5 customers by total spending"])
     limit: int = 200
 
+
+def _format_exception_detail(prefix: str, exc: Exception) -> str:
+    message = str(exc).strip() or exc.__class__.__name__
+    return f"{prefix}: {message}"
+
 @router.post("/generate-sql")
 async def generate_sql(payload: GenerateSQLRequest):
     try:
-        schema_summary = build_schema_summary_impl(payload.db_filename)
+        schema_summary = build_relevant_schema_summary_impl(payload.db_filename, payload.question)
 
         result = await generate_sql_from_question(
             question=payload.question,
@@ -56,8 +65,34 @@ async def generate_sql(payload: GenerateSQLRequest):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except SQLGenerationError as exc:
+        logger.warning(
+            "SQL generation failed for db=%s question=%r: %s",
+            payload.db_filename,
+            payload.question,
+            exc,
+        )
+        raise HTTPException(status_code=504, detail=str(exc)) from exc
+    except httpx.HTTPError as exc:
+        logger.exception(
+            "HTTP error during SQL generation for db=%s question=%r",
+            payload.db_filename,
+            payload.question,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=_format_exception_detail("SQL generation HTTP failure", exc),
+        ) from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"SQL generation failed: {exc}") from exc
+        logger.exception(
+            "Unexpected SQL generation error for db=%s question=%r",
+            payload.db_filename,
+            payload.question,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=_format_exception_detail("SQL generation failed", exc),
+        ) from exc
 
 
 @router.post("/ask")
@@ -82,8 +117,34 @@ async def ask(payload: AskRequest):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except SQLGenerationError as exc:
+        logger.warning(
+            "Ask failed during SQL generation for db=%s question=%r: %s",
+            payload.db_filename,
+            payload.question,
+            exc,
+        )
+        raise HTTPException(status_code=504, detail=str(exc)) from exc
+    except httpx.HTTPError as exc:
+        logger.exception(
+            "HTTP error during ask flow for db=%s question=%r",
+            payload.db_filename,
+            payload.question,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=_format_exception_detail("Ask HTTP failure", exc),
+        ) from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Ask failed: {exc}") from exc
+        logger.exception(
+            "Unexpected ask error for db=%s question=%r",
+            payload.db_filename,
+            payload.question,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=_format_exception_detail("Ask failed", exc),
+        ) from exc
 
 
 @router.post("/execute")
