@@ -1,23 +1,31 @@
 # aunalyticsNLSQL
 
-A small FastAPI application that turns natural-language questions into safe, read-only SQLite queries using Ollama. The repo also includes a terminal client for exercising the API against sample databases in `backend/db`.
+A fullstack app that turns natural-language questions into safe, read-only SQLite queries. FastAPI backend + Next.js frontend. Ollama is the primary LLM; Gemini is an automatic fallback when Ollama is unreachable.
+
+## Features
+
+- **Ask questions in plain English** — backend generates SQL, validates it with `sqlglot`, and executes it read-only against your chosen SQLite database.
+- **Schema sidebar + database picker** — browse uploaded databases and inspect their tables/columns.
+- **Drag-and-drop upload** — upload `.sqlite` / `.db` / `.csv` / `.json`; CSV and JSON are converted to SQLite automatically.
+- **Query history** — every successful question is logged; the UI shows recent questions and lets you reuse them.
+- **Gemini fallback** — set `GEMINI_API_KEY` in `.env` and the backend transparently falls back to Gemini when Ollama is offline.
+- **Schema extractor CLI** — `db_tools/` dumps schema (with optional sample rows) to JSON for offline use.
 
 ## Project Layout
 
-- `backend/app/main.py`: FastAPI entrypoint
-- `backend/app/routers`: API routes for query and schema endpoints
-- `backend/app/services`: Ollama, SQLite, validation, and ask-flow logic
-- `backend/db`: local SQLite databases such as `chinook.db`
-- `backend/tests`: route and service tests
-- `backend_cli.py`: terminal client for the `/api/ask` endpoint
+- `backend/app/` — FastAPI app (`main.py`), routers (`query`, `schema`, `upload`), services (`ask_service`, `ollama_service`, `gemini_service`, `sqlite_service`, `sql_validator`, `history_service`).
+- `backend/db/` — local SQLite databases (e.g., `chinook.db`). Uploads land here too.
+- `backend/tests/` — pytest suite for routes and services.
+- `frontend/` — Next.js 16 / React 19 / Tailwind + shadcn. HomePage wires schema sidebar, DB picker, upload, query panel, results table, and history.
+- `db_tools/` — standalone schema-extractor adapter + tests.
+- `backend_cli.py` — terminal client that exercises `/api/ask`.
 
 ## Requirements
 
 - Python 3.10+
-- Ollama running locally at `http://localhost:11434`
-- At least one Ollama model available locally
-
-The backend prefers the `OLLAMA_MODEL` environment variable when set. Otherwise it will try an installed model from this list: `qwen2.5-coder:3b`, `phi3`, `qwen3`, `llama3.2`, `gemma3`.
+- Node 20+ / npm
+- Ollama running locally at `http://localhost:11434` with at least one supported model installed. Preferred list: `qwen2.5-coder:3b`, `phi3`, `qwen3`, `llama3.2`, `gemma3`. Override with `OLLAMA_MODEL`.
+- *(Optional)* `GEMINI_API_KEY` in a root `.env` file for the Gemini fallback.
 
 ## Install
 
@@ -76,27 +84,33 @@ Once the backend is running, the main routes are:
 
 The `/api/ask` flow builds relevant schema context for the question, asks Ollama for a single read-only SQL statement, validates that SQL, and executes it against SQLite with a row limit.
 
-## Web UI (Week 2 — schema sidebar and file upload)
+## Web UI
 
-The Next.js frontend lives in [`frontend/`](frontend/). It shows a **collapsible schema sidebar** (`GET /api/schema/{filename}`), a **database picker** (`GET /api/databases`), and **drag-and-drop upload** (`POST /api/upload`).
+The Next.js frontend lives in [`frontend/`](frontend/). HomePage wires the schema sidebar (`GET /api/schema/{filename}`), database picker (`GET /api/databases`), drag-and-drop upload (`POST /api/upload`), a **question input + results table** (`POST /api/ask`), and a **history panel** (`GET /api/history`) — clicking a history item reuses that question.
 
-1. Start the API (see above).
+1. Start the backend (see above).
 2. In a second terminal:
 
 ```bash
 cd frontend
 npm install
-cp .env.example .env.local
+cp .env.example .env.local          # NEXT_PUBLIC_API_URL defaults to http://127.0.0.1:8000
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000). Set `NEXT_PUBLIC_API_URL` in `.env.local` if the API is not on `http://127.0.0.1:8000`.
+Open [http://localhost:3000](http://localhost:3000).
 
-Frontend tests (Vitest):
+Frontend build + tests:
 
 ```bash
-cd frontend && npm run test
+cd frontend
+npm run build
+npm run test
 ```
+
+## Gemini fallback
+
+Copy `.env.example` to `.env` at the repo root and set `GEMINI_API_KEY`. When Ollama's server is unreachable (connection refused during model resolution or during a generation attempt), the backend automatically delegates to Gemini (`gemini-2.5-flash` by default; override with `GEMINI_MODEL`). `.env` is gitignored.
 
 ## Terminal Client
 
