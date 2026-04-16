@@ -15,6 +15,7 @@ if str(BACKEND_DIR) not in sys.path:
 from app.main import app
 from app.routers import query as query_router
 from app.services.ask_service import AskResult
+from app.services.ollama_service import SQLGenerationError
 
 client = TestClient(app)
 
@@ -36,7 +37,7 @@ def test_ask_success_path_returns_minimal_query_payload(monkeypatch: pytest.Monk
         assert db_filename == "chinook.db"
         assert limit == 5
         return AskResult(
-            sql="SELECT FirstName, LastName FROM customers ORDER BY CustomerId LIMIT 1",
+            sql="SELECT FirstName, LastName FROM customers ORDER BY CustomerId LIMIT 1", confidence=0.84,
             columns=["FirstName", "LastName"],
             rows=[{"FirstName": "Luís", "LastName": "Gonçalves"}],
             row_count=1,
@@ -44,6 +45,12 @@ def test_ask_success_path_returns_minimal_query_payload(monkeypatch: pytest.Monk
         )
 
     monkeypatch.setattr(query_router, "ask_question", fake_ask_question)
+    logged_calls: list[tuple[str, str, float | None]] = []
+    monkeypatch.setattr(
+        query_router,
+        "log_successful_query",
+        lambda question, sql, confidence: logged_calls.append((question, sql, confidence)),
+    )
 
     response = _post_ask("unused")
 
@@ -60,6 +67,13 @@ def test_ask_success_path_returns_minimal_query_payload(monkeypatch: pytest.Monk
     }
     assert "answer" not in body
     assert "tool_calls" not in body
+    assert logged_calls == [
+        (
+            "unused",
+            "SELECT FirstName, LastName FROM customers ORDER BY CustomerId LIMIT 1",
+            0.84,
+        )
+    ]
 
 
 def test_ask_returns_404_for_missing_database(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -106,5 +120,82 @@ def test_ask_returns_500_when_direct_query_flow_fails(monkeypatch: pytest.Monkey
 
     response = _post_ask("unused")
 
-    assert response.status_code == 500
+    assert response.status_code == 502
     assert "Connection refused" in response.json()["detail"]
+
+
+def test_ask_returns_504_for_sql_generation_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_ask_question(question: str, db_filename: str, limit: int):
+        raise SQLGenerationError("SQL generation timed out after 45s on attempt 1 of 2")
+
+    monkeypatch.setattr(query_router, "ask_question", fake_ask_question)
+
+    response = _post_ask("unused")
+
+    assert response.status_code == 504
+    assert response.json()["detail"] == "SQL generation timed out after 45s on attempt 1 of 2"
+
+
+def test_ask_returns_exception_type_when_error_message_is_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_ask_question(question: str, db_filename: str, limit: int):
+        raise RuntimeError()
+
+    monkeypatch.setattr(query_router, "ask_question", fake_ask_question)
+
+    response = _post_ask("unused")
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "Ask failed: RuntimeError"
+
+
+def test_history_returns_latest_entries(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        query_router,
+        "get_recent_history",
+        lambda limit: [
+            {
+                "id": 2,
+                "question": "latest",
+                "sql": "SELECT 2",
+                "confidence": 0.9,
+                "status": "success",
+                "error_message": None,
+                "created_at": "2026-04-07T00:00:00+00:00",
+            },
+            {
+                "id": 1,
+                "question": "older",
+                "sql": "SELECT 1",
+                "confidence": 0.7,
+                "status": "success",
+                "error_message": None,
+                "created_at": "2026-04-06T00:00:00+00:00",
+            },
+        ],
+    )
+
+    response = client.get("/api/history")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "items": [
+            {
+                "id": 2,
+                "question": "latest",
+                "sql": "SELECT 2",
+                "confidence": 0.9,
+                "status": "success",
+                "error_message": None,
+                "created_at": "2026-04-07T00:00:00+00:00",
+            },
+            {
+                "id": 1,
+                "question": "older",
+                "sql": "SELECT 1",
+                "confidence": 0.7,
+                "status": "success",
+                "error_message": None,
+                "created_at": "2026-04-06T00:00:00+00:00",
+            },
+        ]
+    }

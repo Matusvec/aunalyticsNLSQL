@@ -1,0 +1,54 @@
+{
+  "tables": {
+    "users": {
+      "columns": [
+        {
+          "name": "id",
+          "type": "INTEGER",
+          "notnull": false,
+          "default": null,
+          "pk": true
+        },
+        {
+          "name": "name",
+          "type": "TEXT",
+          "notnull": false,
+          "default": null,
+          "pk": false
+        },
+        {
+          "name": "email",
+          "type": "TEXT",
+          "notnull": false,
+          "default": null,
+          "pk": false
+        }
+      ]
+    },
+    "posts": {
+      "columns": [
+        {
+          "name": "id",
+          "type": "INTEGER",
+          "notnull": false,
+          "default": null,
+          "pk": true
+        },
+        {
+          "name": "user_id",
+          "type": "INTEGER",
+          "notnull": false,
+          "default": null,
+          "pk": false
+        },
+        {
+          "name": "content",
+          "type": "TEXT",
+          "notnull": false,
+          "default": null,
+          "pk": false
+        }
+      ]
+    }
+  }
+}

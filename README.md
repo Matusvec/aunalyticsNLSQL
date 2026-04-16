@@ -1,8 +1,35 @@
 # aunalyticsNLSQL
 
-## Development
+A fullstack app that turns natural-language questions into safe, read-only SQLite queries. FastAPI backend + Next.js frontend. Ollama is the primary LLM; Gemini is an automatic fallback when Ollama is unreachable.
 
-Install app requirements:
+## Features
+
+- **Ask questions in plain English** — backend generates SQL, validates it with `sqlglot`, and executes it read-only against your chosen SQLite database.
+- **Schema sidebar + database picker** — browse uploaded databases and inspect their tables/columns.
+- **Drag-and-drop upload** — upload `.sqlite` / `.db` / `.csv` / `.json`; CSV and JSON are converted to SQLite automatically.
+- **Query history** — every successful question is logged; the UI shows recent questions and lets you reuse them.
+- **Gemini fallback** — set `GEMINI_API_KEY` in `.env` and the backend transparently falls back to Gemini when Ollama is offline.
+- **Schema extractor CLI** — `db_tools/` dumps schema (with optional sample rows) to JSON for offline use.
+
+## Project Layout
+
+- `backend/app/` — FastAPI app (`main.py`), routers (`query`, `schema`, `upload`), services (`ask_service`, `ollama_service`, `gemini_service`, `sqlite_service`, `sql_validator`, `history_service`).
+- `backend/db/` — local SQLite databases (e.g., `chinook.db`). Uploads land here too.
+- `backend/tests/` — pytest suite for routes and services.
+- `frontend/` — Next.js 16 / React 19 / Tailwind + shadcn. HomePage wires schema sidebar, DB picker, upload, query panel, results table, and history.
+- `db_tools/` — standalone schema-extractor adapter + tests.
+- `backend_cli.py` — terminal client that exercises `/api/ask`.
+
+## Requirements
+
+- Python 3.10+
+- Node 20+ / npm
+- Ollama running locally at `http://localhost:11434` with at least one supported model installed. Preferred list: `qwen2.5-coder:3b`, `phi3`, `qwen3`, `llama3.2`, `gemma3`. Override with `OLLAMA_MODEL`.
+- *(Optional)* `GEMINI_API_KEY` in a root `.env` file for the Gemini fallback.
+
+## Install
+
+Install application dependencies:
 
 ```bash
 pip install -r requirements.txt
@@ -12,7 +39,7 @@ pip install -r requirements.txt
 py -m pip install -r requirements.txt
 ```
 
-Install dev/test requirements:
+Install development and test dependencies:
 
 ```bash
 pip install -r requirements-dev.txt
@@ -22,7 +49,9 @@ pip install -r requirements-dev.txt
 py -m pip install -r requirements-dev.txt
 ```
 
-Start the FastAPI app:
+## Run The Backend
+
+Start the FastAPI app with the helper script:
 
 ```bash
 ./start_dev_services.sh
@@ -32,22 +61,60 @@ Start the FastAPI app:
 .\start_dev_services.ps1
 ```
 
-The startup scripts prefer the project virtualenv when present (`.venv` at the repo root or inside `backend`), then fall back to `py`, `python`, or `python3`. They do not require a local `.venv`, but they do require that the project requirements are already installed for whichever Python they find.
+The startup scripts prefer a virtualenv at the repo root (`.venv`) or under `backend/.venv`, then fall back to `py`, `python`, or `python3`.
 
-If you get an error in Powershell saying you can't execute scripts on your machine you may have to run 
+This starts the API from `backend/app/main.py`. Stop it with `Ctrl-C`.
+
+If PowerShell blocks script execution, you may need:
+
 ```powershell
 Set-ExecutionPolicy Unrestricted
 ```
 
-This starts the FastAPI app from `backend/app/main.py`.
+## API Endpoints
 
-Press `Ctrl-C` to stop the service.
+Once the backend is running, the main routes are:
+
+- `GET /health`: health check
+- `GET /api/schema/{db_filename}`: full schema details
+- `GET /api/schema-summary/{db_filename}`: compact schema summary
+- `POST /api/generate-sql`: generate validated read-only SQL from a question
+- `POST /api/execute`: execute validated read-only SQL against a selected database
+- `POST /api/ask`: generate SQL, validate it, execute it, and return rows
+
+The `/api/ask` flow builds relevant schema context for the question, asks Ollama for a single read-only SQL statement, validates that SQL, and executes it against SQLite with a row limit.
+
+## Web UI
+
+The Next.js frontend lives in [`frontend/`](frontend/). HomePage wires the schema sidebar (`GET /api/schema/{filename}`), database picker (`GET /api/databases`), drag-and-drop upload (`POST /api/upload`), a **question input + results table** (`POST /api/ask`), and a **history panel** (`GET /api/history`) — clicking a history item reuses that question.
+
+1. Start the backend (see above).
+2. In a second terminal:
+
+```bash
+cd frontend
+npm install
+cp .env.example .env.local          # NEXT_PUBLIC_API_URL defaults to http://127.0.0.1:8000
+npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000).
+
+Frontend build + tests:
+
+```bash
+cd frontend
+npm run build
+npm run test
+```
+
+## Gemini fallback
+
+Copy `.env.example` to `.env` at the repo root and set `GEMINI_API_KEY`. When Ollama's server is unreachable (connection refused during model resolution or during a generation attempt), the backend automatically delegates to Gemini (`gemini-2.5-flash` by default; override with `GEMINI_MODEL`). `.env` is gitignored.
 
 ## Terminal Client
 
-With the backend running, you can use the terminal client to pick a database from `backend/db` and send natural-language questions to `POST /api/ask`. That route builds schema context from the selected SQLite database, asks Ollama for a read-only SQL query, validates it, executes it locally against SQLite, and returns raw results.
-
-Run it with:
+With the backend running, launch the terminal client:
 
 ```bash
 python3 backend_cli.py
@@ -58,48 +125,62 @@ py .\backend_cli.py
 ```
 
 The client will:
-- list available database files
+
+- list available databases from `backend/db`
 - prompt you to choose one
 - let you ask questions in a loop
 - print the backend JSON response
 
-Type `quit`, `exit`, or `q` to leave the client.
+Type `quit`, `exit`, or `q` to leave.
 
+## Testing
 
-## Testing `/api/ask`
-
-Run the end-to-end tests for the `/api/ask` route:
+Run the full test suite:
 
 ```bash
-./run_ask_tests.sh
+./run_tests.sh
 ```
 
 ```powershell
-bash ./run_ask_tests.sh
+bash ./run_tests.sh
 ```
-
-The script uses the active Python environment, `python`, or `python3` in that order, and exits with a helpful message if `pytest` is not installed.
 
 This runs:
 
 ```bash
-python -m pytest -v -rP backend/tests/test_ask_route.py
+python -m pytest -v -rA backend/tests
 ```
 
-```powershell
-py -m pytest -v -rP backend/tests/test_ask_route.py
-```
-
-The flags mean:
-- `-v`: show each test name as it runs
-- `-rP`: include passed-test details in the summary
-
-You can also pass extra pytest arguments through the script:
+You can also run focused test modules directly:
 
 ```bash
-./run_ask_tests.sh -k happy
+python -m pytest -v -rA backend/tests/test_ask_route.py
+python -m pytest -v -rA backend/tests/test_ask_service.py
+python -m pytest -v -rA backend/tests/test_ollama_service.py
+python -m pytest -v -rA backend/tests/test_sql_validator.py
 ```
 
-```powershell
-bash ./run_ask_tests.sh -k happy
+Or pass extra pytest filters through the script:
+
+```bash
+./run_tests.sh -k ask
+```
+
+## Database Schema Extractor (db_tools)
+
+Auxiliary schema extraction utility in `db_tools/`, using the Adapter pattern with `SQLiteExtractor` (easy to swap in a `PostgresExtractor` later). The main ask flow uses the backend's built-in schema summary; this tool is useful for exporting full schema + sample rows to JSON for offline use.
+
+**Extract a local SQLite database schema to JSON:**
+```bash
+python3 db_tools/db_extractor.py --db path/to/db.sqlite --out schema.json
+```
+
+**Include a small number of sample rows per table for LLM context:**
+```bash
+python3 db_tools/db_extractor.py --db path/to/db.sqlite --samples 5 --out schema_with_samples.json
+```
+
+**Tests:**
+```bash
+pytest db_tools/tests/test_db_extractor.py
 ```
