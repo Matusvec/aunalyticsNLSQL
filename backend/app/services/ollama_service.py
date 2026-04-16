@@ -250,6 +250,30 @@ def _normalize_and_verify_generation(
         verifier(normalized_sql)
     return result.model_copy(update={"sql": normalized_sql})
 
+async def _try_gemini_fallback(
+    question: str,
+    schema_summary: str,
+    verifier: Callable[[str], None] | None,
+    reason: str,
+) -> Optional["SQLGenerationResult"]:
+    """Return a Gemini-generated result, or None if Gemini is not configured/reachable."""
+    from app.services import gemini_service
+
+    if not gemini_service.is_configured():
+        logger.info("Gemini fallback skipped (%s): GEMINI_API_KEY not set", reason)
+        return None
+    try:
+        logger.warning("Ollama unavailable (%s); attempting Gemini fallback", reason)
+        return await gemini_service.generate_sql_via_gemini(
+            question=question,
+            schema_summary=schema_summary,
+            verifier=verifier,
+        )
+    except Exception:
+        logger.exception("Gemini fallback also failed")
+        return None
+
+
 async def generate_sql_from_question(
     question: str,
     schema_summary: str,
@@ -258,7 +282,21 @@ async def generate_sql_from_question(
     prompt = build_sql_prompt(question=question, schema_summary=schema_summary)
 
     async with httpx.AsyncClient(timeout=max(SQL_GENERATION_ATTEMPT_TIMEOUTS_SECONDS)) as client:
-        model = await resolve_ollama_model(client)
+        try:
+            model = await resolve_ollama_model(client)
+        except httpx.ConnectError as exc:
+            fallback = await _try_gemini_fallback(
+                question=question,
+                schema_summary=schema_summary,
+                verifier=verifier,
+                reason=f"connect error resolving model: {exc}",
+            )
+            if fallback is not None:
+                return fallback
+            raise SQLGenerationError(
+                "Ollama is unreachable and no Gemini fallback is configured."
+            ) from exc
+
         last_error: ValueError | None = None
         for attempt_number in range(1, MAX_SQL_GENERATION_ATTEMPTS + 1):
             attempt_started = time.perf_counter()
@@ -270,6 +308,18 @@ async def generate_sql_from_question(
                     prompt=prompt,
                     timeout_seconds=timeout_seconds,
                 )
+            except httpx.ConnectError as exc:
+                fallback = await _try_gemini_fallback(
+                    question=question,
+                    schema_summary=schema_summary,
+                    verifier=verifier,
+                    reason=f"connect error on attempt {attempt_number}: {exc}",
+                )
+                if fallback is not None:
+                    return fallback
+                raise SQLGenerationError(
+                    "Ollama is unreachable and no Gemini fallback is configured."
+                ) from exc
             except httpx.TimeoutException as exc:
                 elapsed_seconds = time.perf_counter() - attempt_started
                 logger.warning(
