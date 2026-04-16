@@ -15,6 +15,7 @@ if str(BACKEND_DIR) not in sys.path:
 from app.main import app
 from app.routers import query as query_router
 from app.services.ask_service import AskResult
+from app.services.ollama_service import SQLGenerationError
 
 client = TestClient(app)
 
@@ -106,5 +107,29 @@ def test_ask_returns_500_when_direct_query_flow_fails(monkeypatch: pytest.Monkey
 
     response = _post_ask("unused")
 
-    assert response.status_code == 500
+    assert response.status_code == 502
     assert "Connection refused" in response.json()["detail"]
+
+
+def test_ask_returns_504_for_sql_generation_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_ask_question(question: str, db_filename: str, limit: int):
+        raise SQLGenerationError("SQL generation timed out after 45s on attempt 1 of 2")
+
+    monkeypatch.setattr(query_router, "ask_question", fake_ask_question)
+
+    response = _post_ask("unused")
+
+    assert response.status_code == 504
+    assert response.json()["detail"] == "SQL generation timed out after 45s on attempt 1 of 2"
+
+
+def test_ask_returns_exception_type_when_error_message_is_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_ask_question(question: str, db_filename: str, limit: int):
+        raise RuntimeError()
+
+    monkeypatch.setattr(query_router, "ask_question", fake_ask_question)
+
+    response = _post_ask("unused")
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "Ask failed: RuntimeError"

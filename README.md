@@ -1,8 +1,27 @@
 # aunalyticsNLSQL
 
-## Development
+A small FastAPI application that turns natural-language questions into safe, read-only SQLite queries using Ollama. The repo also includes a terminal client for exercising the API against sample databases in `backend/db`.
 
-Install app requirements:
+## Project Layout
+
+- `backend/app/main.py`: FastAPI entrypoint
+- `backend/app/routers`: API routes for query and schema endpoints
+- `backend/app/services`: Ollama, SQLite, validation, and ask-flow logic
+- `backend/db`: local SQLite databases such as `chinook.db`
+- `backend/tests`: route and service tests
+- `backend_cli.py`: terminal client for the `/api/ask` endpoint
+
+## Requirements
+
+- Python 3.10+
+- Ollama running locally at `http://localhost:11434`
+- At least one Ollama model available locally
+
+The backend prefers the `OLLAMA_MODEL` environment variable when set. Otherwise it will try an installed model from this list: `qwen2.5-coder:3b`, `phi3`, `qwen3`, `llama3.2`, `gemma3`.
+
+## Install
+
+Install application dependencies:
 
 ```bash
 pip install -r requirements.txt
@@ -12,7 +31,7 @@ pip install -r requirements.txt
 py -m pip install -r requirements.txt
 ```
 
-Install dev/test requirements:
+Install development and test dependencies:
 
 ```bash
 pip install -r requirements-dev.txt
@@ -22,7 +41,9 @@ pip install -r requirements-dev.txt
 py -m pip install -r requirements-dev.txt
 ```
 
-Start the FastAPI app:
+## Run The Backend
+
+Start the FastAPI app with the helper script:
 
 ```bash
 ./start_dev_services.sh
@@ -32,22 +53,32 @@ Start the FastAPI app:
 .\start_dev_services.ps1
 ```
 
-The startup scripts prefer the project virtualenv when present (`.venv` at the repo root or inside `backend`), then fall back to `py`, `python`, or `python3`. They do not require a local `.venv`, but they do require that the project requirements are already installed for whichever Python they find.
+The startup scripts prefer a virtualenv at the repo root (`.venv`) or under `backend/.venv`, then fall back to `py`, `python`, or `python3`.
 
-If you get an error in Powershell saying you can't execute scripts on your machine you may have to run 
+This starts the API from `backend/app/main.py`. Stop it with `Ctrl-C`.
+
+If PowerShell blocks script execution, you may need:
+
 ```powershell
 Set-ExecutionPolicy Unrestricted
 ```
 
-This starts the FastAPI app from `backend/app/main.py`.
+## API Endpoints
 
-Press `Ctrl-C` to stop the service.
+Once the backend is running, the main routes are:
+
+- `GET /health`: health check
+- `GET /api/schema/{db_filename}`: full schema details
+- `GET /api/schema-summary/{db_filename}`: compact schema summary
+- `POST /api/generate-sql`: generate validated read-only SQL from a question
+- `POST /api/execute`: execute validated read-only SQL against a selected database
+- `POST /api/ask`: generate SQL, validate it, execute it, and return rows
+
+The `/api/ask` flow builds relevant schema context for the question, asks Ollama for a single read-only SQL statement, validates that SQL, and executes it against SQLite with a row limit.
 
 ## Terminal Client
 
-With the backend running, you can use the terminal client to pick a database from `backend/db` and send natural-language questions to `POST /api/ask`. That route builds schema context from the selected SQLite database, asks Ollama for a read-only SQL query, validates it, executes it locally against SQLite, and returns raw results.
-
-Run it with:
+With the backend running, launch the terminal client:
 
 ```bash
 python3 backend_cli.py
@@ -58,48 +89,43 @@ py .\backend_cli.py
 ```
 
 The client will:
-- list available database files
+
+- list available databases from `backend/db`
 - prompt you to choose one
 - let you ask questions in a loop
 - print the backend JSON response
 
-Type `quit`, `exit`, or `q` to leave the client.
+Type `quit`, `exit`, or `q` to leave.
 
+## Testing
 
-## Testing `/api/ask`
-
-Run the end-to-end tests for the `/api/ask` route:
+Run the full test suite:
 
 ```bash
-./run_ask_tests.sh
+./run_tests.sh
 ```
 
 ```powershell
-bash ./run_ask_tests.sh
+bash ./run_tests.sh
 ```
-
-The script uses the active Python environment, `python`, or `python3` in that order, and exits with a helpful message if `pytest` is not installed.
 
 This runs:
 
 ```bash
-python -m pytest -v -rP backend/tests/test_ask_route.py
+python -m pytest -v -rA backend/tests
 ```
 
-```powershell
-py -m pytest -v -rP backend/tests/test_ask_route.py
-```
-
-The flags mean:
-- `-v`: show each test name as it runs
-- `-rP`: include passed-test details in the summary
-
-You can also pass extra pytest arguments through the script:
+You can also run focused test modules directly:
 
 ```bash
-./run_ask_tests.sh -k happy
+python -m pytest -v -rA backend/tests/test_ask_route.py
+python -m pytest -v -rA backend/tests/test_ask_service.py
+python -m pytest -v -rA backend/tests/test_ollama_service.py
+python -m pytest -v -rA backend/tests/test_sql_validator.py
 ```
 
-```powershell
-bash ./run_ask_tests.sh -k happy
+Or pass extra pytest filters through the script:
+
+```bash
+./run_tests.sh -k ask
 ```
