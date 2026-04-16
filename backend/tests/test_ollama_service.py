@@ -71,7 +71,7 @@ async def test_generate_sql_from_question_retries_when_model_returns_multiple_st
     assert "Fix the failed SQL" in prompts[1][0]
     assert "Last SQL: SELECT 1; SELECT 2" in prompts[1][0]
     assert "Error: Multiple statements are not allowed" in prompts[1][0]
-    assert "Do not repeat the same mistake" in prompts[1][0]
+    assert "Do not repeat the same failure" in prompts[1][0]
     assert "Take enough time to verify table names, aliases, and column names" in prompts[1][0]
     assert "Prefer a single SELECT with explicit JOIN clauses over a CTE" in prompts[1][0]
 
@@ -287,7 +287,7 @@ async def test_generate_sql_from_question_adds_alias_guidance_for_bad_alias_colu
     )
 
     assert result.sql == "SELECT i.InvoiceId FROM invoice_items AS i"
-    assert "i.CustomerId is invalid" in prompts[1][0]
+    assert "`i.CustomerId` is invalid" in prompts[1][0]
     assert "A table alias does not create or rename columns" in prompts[1][0]
     assert "every `alias.column` reference must map to a real column" in prompts[1][0]
 
