@@ -151,3 +151,22 @@ Or pass extra pytest filters through the script:
 ```bash
 ./run_tests.sh -k ask
 ```
+
+## Database Schema Extractor (db_tools)
+
+Auxiliary schema extraction utility in `db_tools/`, using the Adapter pattern with `SQLiteExtractor` (easy to swap in a `PostgresExtractor` later). The main ask flow uses the backend's built-in schema summary; this tool is useful for exporting full schema + sample rows to JSON for offline use.
+
+**Extract a local SQLite database schema to JSON:**
+```bash
+python3 db_tools/db_extractor.py --db path/to/db.sqlite --out schema.json
+```
+
+**Include a small number of sample rows per table for LLM context:**
+```bash
+python3 db_tools/db_extractor.py --db path/to/db.sqlite --samples 5 --out schema_with_samples.json
+```
+
+**Tests:**
+```bash
+pytest db_tools/tests/test_db_extractor.py
+```
