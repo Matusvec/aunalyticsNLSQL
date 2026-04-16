@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 
+from typing import Literal
+
 import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -32,6 +34,7 @@ class AskRequest(BaseModel):
     db_filename: str = Field(..., examples=["chinook.sqlite"])
     question: str = Field(..., examples=["Show the top 5 customers by total spending"])
     limit: int = 200
+    provider: Literal["auto", "ollama", "gemini"] = "auto"
 
 
 def _format_exception_detail(prefix: str, exc: Exception) -> str:
@@ -103,6 +106,7 @@ async def ask(payload: AskRequest):
             question=payload.question,
             db_filename=payload.db_filename,
             limit=payload.limit,
+            provider=payload.provider,
         )
         log_successful_query(
             question=payload.question,
@@ -118,6 +122,8 @@ async def ask(payload: AskRequest):
             "rows": result.rows,
             "row_count": result.row_count,
             "limit_applied": result.limit_applied,
+            "confidence": result.confidence,
+            "provider": result.provider,
         }
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

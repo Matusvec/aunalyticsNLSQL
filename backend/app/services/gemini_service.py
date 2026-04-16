@@ -44,6 +44,27 @@ Convert the user's question into exactly one read-only SQLite query (SELECT or W
 - Prefer LIMIT for browsing queries.
 - If the question is ambiguous, pick the most reasonable interpretation and list it in assumptions.
 
+Aggregation rules (critical):
+- If the SELECT list mixes aggregate functions (COUNT, SUM, AVG, MIN, MAX) with any non-aggregated column, you MUST add a GROUP BY clause that lists every non-aggregated column.
+- "Per X", "by X", "each X" imply GROUP BY X plus an aggregate.
+- `SELECT SUM(x) FROM ...` (no non-aggregated columns) returns one row and needs no GROUP BY.
+- SQLite will not error without GROUP BY — it will silently return wrong results. Always add it when required.
+
+Ranking direction rules (top vs. bottom — do not confuse):
+- "top", "highest", "largest", "most", "best" → `ORDER BY metric DESC LIMIT N`.
+- "bottom", "lowest", "smallest", "least", "worst", "fewest" → `ORDER BY metric ASC LIMIT N`.
+- Re-read the question before choosing the direction.
+
+Counting vs. listing:
+- "How many X" → single-row `SELECT COUNT(...)`.
+- "Which X" / "list X" / "show X" → rows themselves.
+- "How many X per Y" → `SELECT Y, COUNT(...) ... GROUP BY Y`.
+
+Self-check before answering:
+1. If SELECT mixes aggregates and bare columns, is there a GROUP BY covering every bare column?
+2. Does the ORDER BY direction (ASC/DESC) match what the user asked for?
+3. Is every alias.column a real column on that alias's exact table?
+
 Respond with JSON ONLY (no markdown fences, no prose) in this exact shape:
 {{"sql": "<single SQLite SELECT statement>",
   "assumptions": ["<assumption 1>", "..."],

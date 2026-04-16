@@ -32,7 +32,7 @@ def _post_ask(question: str, limit: int = 5) -> httpx.Response:
 
 
 def test_ask_success_path_returns_minimal_query_payload(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_ask_question(question: str, db_filename: str, limit: int) -> AskResult:
+    async def fake_ask_question(question: str, db_filename: str, limit: int, provider: str = "auto") -> AskResult:
         assert question == "unused"
         assert db_filename == "chinook.db"
         assert limit == 5
@@ -64,6 +64,8 @@ def test_ask_success_path_returns_minimal_query_payload(monkeypatch: pytest.Monk
         "rows": [{"FirstName": "Luís", "LastName": "Gonçalves"}],
         "row_count": 1,
         "limit_applied": 5,
+        "confidence": 0.84,
+        "provider": "ollama",
     }
     assert "answer" not in body
     assert "tool_calls" not in body
@@ -77,7 +79,7 @@ def test_ask_success_path_returns_minimal_query_payload(monkeypatch: pytest.Monk
 
 
 def test_ask_returns_404_for_missing_database(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_ask_question(question: str, db_filename: str, limit: int):
+    async def fake_ask_question(question: str, db_filename: str, limit: int, provider: str = "auto"):
         raise FileNotFoundError("Database not found: missing.db")
 
     monkeypatch.setattr(query_router, "ask_question", fake_ask_question)
@@ -89,7 +91,7 @@ def test_ask_returns_404_for_missing_database(monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_ask_returns_400_for_invalid_request(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_ask_question(question: str, db_filename: str, limit: int):
+    async def fake_ask_question(question: str, db_filename: str, limit: int, provider: str = "auto"):
         raise ValueError("Only read-only SELECT queries are allowed")
 
     monkeypatch.setattr(query_router, "ask_question", fake_ask_question)
@@ -101,7 +103,7 @@ def test_ask_returns_400_for_invalid_request(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_ask_returns_400_for_invalid_generated_sql(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_ask_question(question: str, db_filename: str, limit: int):
+    async def fake_ask_question(question: str, db_filename: str, limit: int, provider: str = "auto"):
         raise ValueError("no such column: i.CustomerId")
 
     monkeypatch.setattr(query_router, "ask_question", fake_ask_question)
@@ -113,7 +115,7 @@ def test_ask_returns_400_for_invalid_generated_sql(monkeypatch: pytest.MonkeyPat
 
 
 def test_ask_returns_500_when_direct_query_flow_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_ask_question(question: str, db_filename: str, limit: int):
+    async def fake_ask_question(question: str, db_filename: str, limit: int, provider: str = "auto"):
         raise httpx.ConnectError("Connection refused")
 
     monkeypatch.setattr(query_router, "ask_question", fake_ask_question)
@@ -125,7 +127,7 @@ def test_ask_returns_500_when_direct_query_flow_fails(monkeypatch: pytest.Monkey
 
 
 def test_ask_returns_504_for_sql_generation_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_ask_question(question: str, db_filename: str, limit: int):
+    async def fake_ask_question(question: str, db_filename: str, limit: int, provider: str = "auto"):
         raise SQLGenerationError("SQL generation timed out after 45s on attempt 1 of 2")
 
     monkeypatch.setattr(query_router, "ask_question", fake_ask_question)
@@ -137,7 +139,7 @@ def test_ask_returns_504_for_sql_generation_timeout(monkeypatch: pytest.MonkeyPa
 
 
 def test_ask_returns_exception_type_when_error_message_is_empty(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_ask_question(question: str, db_filename: str, limit: int):
+    async def fake_ask_question(question: str, db_filename: str, limit: int, provider: str = "auto"):
         raise RuntimeError()
 
     monkeypatch.setattr(query_router, "ask_question", fake_ask_question)

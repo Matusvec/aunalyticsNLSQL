@@ -77,6 +77,8 @@ export function uploadFileWithProgress(
   });
 }
 
+export type Provider = "auto" | "ollama" | "gemini";
+
 export type AskResponse = {
   db_filename: string;
   question: string;
@@ -87,17 +89,19 @@ export type AskResponse = {
   limit_applied: number | null;
   confidence?: number | null;
   assumptions?: string[];
+  provider?: string;
 };
 
 export async function askQuestion(
   dbFilename: string,
   question: string,
   limit = 200,
+  provider: Provider = "auto",
 ): Promise<AskResponse> {
   const res = await fetch(`${getApiBaseUrl()}/api/ask`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ db_filename: dbFilename, question, limit }),
+    body: JSON.stringify({ db_filename: dbFilename, question, limit, provider }),
   });
   if (!res.ok) {
     let detail = "";
