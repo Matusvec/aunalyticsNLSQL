@@ -7,3 +7,7 @@ sqlglot==30.0.3
 
 # Local Ollama chat client
 ollama==0.6.1
+
+# File upload (Task 5) — CSV/JSON → SQLite
+pandas==2.2.3
+python-multipart==0.0.9

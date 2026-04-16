@@ -76,6 +76,28 @@ Once the backend is running, the main routes are:
 
 The `/api/ask` flow builds relevant schema context for the question, asks Ollama for a single read-only SQL statement, validates that SQL, and executes it against SQLite with a row limit.
 
+## Web UI (Week 2 — schema sidebar and file upload)
+
+The Next.js frontend lives in [`frontend/`](frontend/). It shows a **collapsible schema sidebar** (`GET /api/schema/{filename}`), a **database picker** (`GET /api/databases`), and **drag-and-drop upload** (`POST /api/upload`).
+
+1. Start the API (see above).
+2. In a second terminal:
+
+```bash
+cd frontend
+npm install
+cp .env.example .env.local
+npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000). Set `NEXT_PUBLIC_API_URL` in `.env.local` if the API is not on `http://127.0.0.1:8000`.
+
+Frontend tests (Vitest):
+
+```bash
+cd frontend && npm run test
+```
+
 ## Terminal Client
 
 With the backend running, launch the terminal client:
