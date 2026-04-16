@@ -4,18 +4,19 @@ import { useCallback, useEffect, useState } from "react";
 
 import { DatabaseSelector } from "@/components/database-selector";
 import { FileUpload } from "@/components/file-upload";
+import { HistoryPanel } from "@/components/history-panel";
+import { QueryPanel } from "@/components/query-panel";
 import { SchemaSidebar } from "@/components/schema-sidebar";
 import { listDatabases } from "@/lib/api";
 import type { DatabaseEntry } from "@/lib/schema-types";
 import { useSchema } from "@/hooks/useSchema";
 
-/**
- * Wires Task 4 (schema sidebar) with Task 7 (upload + picker + live schema refresh).
- */
 export function HomePage() {
   const [databases, setDatabases] = useState<DatabaseEntry[]>([]);
   const [selectedDb, setSelectedDb] = useState<string | null>(null);
   const [listError, setListError] = useState<string | null>(null);
+  const [question, setQuestion] = useState("");
+  const [historyRefreshToken, setHistoryRefreshToken] = useState(0);
 
   const refreshDatabases = useCallback(async (preferFilename?: string) => {
     try {
@@ -74,6 +75,15 @@ export function HomePage() {
         />
 
         <FileUpload onUploadComplete={onUploadComplete} />
+
+        <QueryPanel
+          dbFilename={selectedDb}
+          question={question}
+          onQuestionChange={setQuestion}
+          onAsked={() => setHistoryRefreshToken((n) => n + 1)}
+        />
+
+        <HistoryPanel refreshToken={historyRefreshToken} onPick={setQuestion} />
       </main>
     </div>
   );

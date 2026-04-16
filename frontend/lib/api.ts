@@ -77,6 +77,60 @@ export function uploadFileWithProgress(
   });
 }
 
+export type AskResponse = {
+  db_filename: string;
+  question: string;
+  sql: string;
+  columns: string[];
+  rows: Array<Record<string, string | number | boolean | null>>;
+  row_count: number;
+  limit_applied: number | null;
+  confidence?: number | null;
+  assumptions?: string[];
+};
+
+export async function askQuestion(
+  dbFilename: string,
+  question: string,
+  limit = 200,
+): Promise<AskResponse> {
+  const res = await fetch(`${getApiBaseUrl()}/api/ask`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ db_filename: dbFilename, question, limit }),
+  });
+  if (!res.ok) {
+    let detail = "";
+    try {
+      const body = (await res.json()) as { detail?: string };
+      detail = body.detail ?? "";
+    } catch {
+      detail = await res.text();
+    }
+    throw new Error(detail || `Ask failed (${res.status})`);
+  }
+  return res.json() as Promise<AskResponse>;
+}
+
+export type HistoryItem = {
+  id: number;
+  question: string;
+  sql: string;
+  confidence: number | null;
+  status: string;
+  error_message: string | null;
+  created_at: string;
+};
+
+export async function fetchHistory(): Promise<HistoryItem[]> {
+  const res = await fetch(`${getApiBaseUrl()}/api/history`);
+  if (!res.ok) {
+    throw new Error(`Failed to load history: ${res.status}`);
+  }
+  const body = (await res.json()) as { items: HistoryItem[] };
+  return body.items;
+}
+
 export const ALLOWED_UPLOAD_EXTENSIONS = [".sqlite", ".db", ".csv", ".json"] as const;
 
 export function validateUploadFile(file: File): string | null {
