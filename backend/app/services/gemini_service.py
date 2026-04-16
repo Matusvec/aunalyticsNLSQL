@@ -85,7 +85,7 @@ async def _request_gemini(prompt: str, model: str, api_key: str) -> str:
     async with httpx.AsyncClient(timeout=GEMINI_TIMEOUT_SECONDS) as client:
         response = await client.post(
             url,
-            params={"key": api_key},
+            headers={"x-goog-api-key": api_key},
             json=payload,
         )
     if response.status_code >= 400:
