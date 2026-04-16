@@ -25,3 +25,4 @@ htmlcov/
 .codex
 
 backend/db/example_sql/
+backend/db/query_history.sqlite

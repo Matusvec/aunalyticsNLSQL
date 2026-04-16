@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from app.services.ask_service import ask_question
+from app.services.history_service import get_recent_history, log_successful_query
 from app.services.ollama_service import SQLGenerationError, generate_sql_from_question
 from app.services.sqlite_service import (
     build_relevant_schema_summary_impl,
@@ -103,6 +104,11 @@ async def ask(payload: AskRequest):
             db_filename=payload.db_filename,
             limit=payload.limit,
         )
+        log_successful_query(
+            question=payload.question,
+            sql=result.sql,
+            confidence=result.confidence,
+        )
 
         return {
             "db_filename": payload.db_filename,
@@ -145,6 +151,14 @@ async def ask(payload: AskRequest):
             status_code=500,
             detail=_format_exception_detail("Ask failed", exc),
         ) from exc
+
+
+@router.get("/history")
+def get_history():
+    try:
+        return {"items": get_recent_history(limit=50)}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to load history: {exc}") from exc
 
 
 @router.post("/execute")
