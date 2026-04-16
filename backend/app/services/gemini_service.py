@@ -60,6 +60,12 @@ Counting vs. listing:
 - "Which X" / "list X" / "show X" → rows themselves.
 - "How many X per Y" → `SELECT Y, COUNT(...) ... GROUP BY Y`.
 
+Counting the right table:
+- FROM = the noun being counted (tracks, customers, invoices).
+- Filter words describe a JOIN/WHERE, not the FROM table.
+- "How many tracks are in the Rock genre?" → FROM tracks, JOIN genres (NOT FROM genres).
+- If counted noun and filter noun live in different tables, JOIN them.
+
 Self-check before answering:
 1. If SELECT mixes aggregates and bare columns, is there a GROUP BY covering every bare column?
 2. Does the ORDER BY direction (ASC/DESC) match what the user asked for?

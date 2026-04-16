@@ -124,6 +124,19 @@ Counting vs. listing:
 - "Which X" / "list X" / "show X" → return the rows themselves, not a count.
 - "How many X per Y" needs `SELECT Y, COUNT(...) ... GROUP BY Y`.
 
+Counting the RIGHT table (common mistake with category words):
+- Identify the noun the user is counting (tracks, customers, invoices, orders). That noun's table is the FROM table.
+- Filter words (by genre, in country X, from year Y) describe a JOIN or WHERE, not the FROM table.
+- Examples of the right shape:
+    - "How many tracks are in the Rock genre?"
+      → `SELECT COUNT(*) FROM tracks t JOIN genres g ON t.GenreId = g.GenreId WHERE g.Name = 'Rock'`
+      → NOT `SELECT COUNT(*) FROM genres WHERE Name = 'Rock'` (that counts genre rows, always 1).
+    - "How many customers are in the USA?"
+      → `SELECT COUNT(*) FROM customers WHERE Country = 'USA'`
+    - "How many albums does Iron Maiden have?"
+      → `SELECT COUNT(*) FROM albums al JOIN artists ar ON al.ArtistId = ar.ArtistId WHERE ar.Name = 'Iron Maiden'`
+- If the counted noun and the filter noun live in different tables, the query MUST join them.
+
 Self-check before outputting:
 1. Does the SELECT list mix aggregates and bare columns? If yes, is there a GROUP BY covering every bare column? If no, add one.
 2. Does "top" / "bottom" (or synonyms) in the question match the ORDER BY direction? If no, flip it.
