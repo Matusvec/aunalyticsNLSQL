@@ -1,0 +1,92 @@
+# Example nginx site config for aunalyticsNLSQL.
+# Place at /etc/nginx/sites-available/aunalytics, then symlink into sites-enabled.
+# Replace example.com with your real domain. Get TLS via `certbot --nginx`.
+
+# Per-IP rate limit zone (defense in depth on top of the in-app slowapi limits).
+limit_req_zone $binary_remote_addr zone=api_general:10m rate=10r/s;
+limit_req_zone $binary_remote_addr zone=api_ask:10m rate=30r/m;
+limit_req_zone $binary_remote_addr zone=api_upload:10m rate=20r/m;
+
+server {
+    listen 80;
+    server_name example.com;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name example.com;
+
+    # ssl_certificate     /etc/letsencrypt/live/example.com/fullchain.pem;
+    # ssl_certificate_key /etc/letsencrypt/live/example.com/privkey.pem;
+
+    # Reasonable security defaults; tighten as needed.
+    add_header Strict-Transport-Security "max-age=63072000" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header X-Frame-Options "DENY" always;
+
+    client_max_body_size 25m;
+    client_body_timeout 60s;
+
+    # Frontend (Next.js on :3000)
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Backend (FastAPI on :8000)
+    location /api/ask {
+        limit_req zone=api_ask burst=5 nodelay;
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+
+    location /api/generate-sql {
+        limit_req zone=api_ask burst=5 nodelay;
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_read_timeout 300s;
+    }
+
+    location /api/upload {
+        limit_req zone=api_upload burst=3 nodelay;
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        client_max_body_size 25m;
+    }
+
+    location /api/ {
+        limit_req zone=api_general burst=20 nodelay;
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+    location = /health {
+        access_log off;
+        proxy_pass http://127.0.0.1:8000/health;
+    }
+
+    location = /ready {
+        access_log off;
+        proxy_pass http://127.0.0.1:8000/ready;
+    }
+}

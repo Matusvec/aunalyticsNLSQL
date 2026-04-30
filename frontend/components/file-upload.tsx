@@ -2,7 +2,6 @@
 
 import { useCallback, useState } from "react";
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import {
@@ -11,21 +10,19 @@ import {
   validateUploadFile,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { Upload } from "lucide-react";
+import { CheckCircle2, Upload } from "lucide-react";
 
 export type FileUploadProps = {
   onUploadComplete: (filename: string) => void;
   disabled?: boolean;
 };
 
-/**
- * Task 7: drag-and-drop zone, client-side validation, upload progress, then notifies parent with saved filename.
- */
 export function FileUpload({ onUploadComplete, disabled }: FileUploadProps) {
   const [dragActive, setDragActive] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
   const [uploading, setUploading] = useState(false);
+  const [lastFilename, setLastFilename] = useState<string | null>(null);
 
   const runUpload = useCallback(
     async (file: File) => {
@@ -39,6 +36,7 @@ export function FileUpload({ onUploadComplete, disabled }: FileUploadProps) {
       setProgress(0);
       try {
         const { filename } = await uploadFileWithProgress(file, setProgress);
+        setLastFilename(filename);
         onUploadComplete(filename);
       } catch (e: unknown) {
         setError(e instanceof Error ? e.message : "Upload failed");
@@ -78,61 +76,70 @@ export function FileUpload({ onUploadComplete, disabled }: FileUploadProps) {
   }, []);
 
   return (
-    <Card className="max-w-md">
-      <CardHeader className="pb-2">
-        <CardTitle className="text-base">Upload database</CardTitle>
-        <CardDescription>
-          Drop a SQLite file, or CSV / JSON (converted to SQLite on the server). Allowed:{" "}
-          {ALLOWED_UPLOAD_EXTENSIONS.join(", ")}
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
-        <Label className="sr-only" htmlFor="file-input">
-          File upload
-        </Label>
-        <div
-          role="button"
-          tabIndex={0}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              document.getElementById("file-input")?.click();
-            }
-          }}
-          onDrop={onDrop}
-          onDragOver={onDragOver}
-          onDragEnter={onDragEnter}
-          onDragLeave={onDragLeave}
-          className={cn(
-            "flex min-h-[120px] cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed px-4 py-6 text-center text-sm transition-colors",
-            dragActive ? "border-primary bg-primary/5" : "border-muted-foreground/25 hover:border-muted-foreground/50",
-            (disabled || uploading) && "pointer-events-none opacity-60",
-          )}
-          onClick={() => !uploading && !disabled && document.getElementById("file-input")?.click()}
-        >
-          <Upload className="mb-2 size-8 text-muted-foreground" aria-hidden />
-          <span className="text-muted-foreground">Drag and drop here, or click to browse</span>
-          <input
-            id="file-input"
-            type="file"
-            className="hidden"
-            accept={ALLOWED_UPLOAD_EXTENSIONS.join(",")}
-            disabled={disabled || uploading}
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) void runUpload(f);
-              e.target.value = "";
-            }}
-          />
+    <div className="flex flex-col gap-3">
+      <Label className="sr-only" htmlFor="file-input">
+        File upload
+      </Label>
+      <div
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            document.getElementById("file-input")?.click();
+          }
+        }}
+        onDrop={onDrop}
+        onDragOver={onDragOver}
+        onDragEnter={onDragEnter}
+        onDragLeave={onDragLeave}
+        className={cn(
+          "group relative flex min-h-[140px] cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed px-4 py-6 text-center text-sm transition-all",
+          dragActive
+            ? "border-primary bg-primary/10 scale-[1.01]"
+            : "border-primary/25 bg-primary/[0.03] hover:border-primary/45 hover:bg-primary/[0.06]",
+          (disabled || uploading) && "pointer-events-none opacity-60",
+        )}
+        onClick={() => !uploading && !disabled && document.getElementById("file-input")?.click()}
+      >
+        <div className="mb-2 grid size-12 place-items-center rounded-full bg-primary/10 text-primary transition-transform group-hover:scale-110">
+          <Upload className="size-6" aria-hidden />
         </div>
-        {uploading ? (
-          <div className="space-y-1">
-            <Progress value={progress} className="h-2" />
-            <p className="text-xs text-muted-foreground">Uploading… {progress}%</p>
-          </div>
-        ) : null}
-        {error ? <p className="text-sm text-destructive">{error}</p> : null}
-      </CardContent>
-    </Card>
+        <span className="font-medium text-foreground">
+          {dragActive ? "Drop to upload" : "Drag & drop, or click to browse"}
+        </span>
+        <span className="mt-1 text-xs text-muted-foreground">
+          {ALLOWED_UPLOAD_EXTENSIONS.join(" · ")} · max 20 MB
+        </span>
+        <input
+          id="file-input"
+          type="file"
+          className="hidden"
+          accept={ALLOWED_UPLOAD_EXTENSIONS.join(",")}
+          disabled={disabled || uploading}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) void runUpload(f);
+            e.target.value = "";
+          }}
+        />
+      </div>
+
+      {uploading ? (
+        <div className="space-y-1">
+          <Progress value={progress} className="h-2" />
+          <p className="text-xs text-muted-foreground">Uploading… {progress}%</p>
+        </div>
+      ) : null}
+
+      {!uploading && lastFilename ? (
+        <p className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400">
+          <CheckCircle2 className="size-3.5" aria-hidden />
+          Uploaded <span className="font-mono font-medium">{lastFilename}</span>
+        </p>
+      ) : null}
+
+      {error ? <p className="text-sm text-destructive">{error}</p> : null}
+    </div>
   );
 }

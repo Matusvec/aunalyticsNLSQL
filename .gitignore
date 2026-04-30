@@ -30,3 +30,6 @@ htmlcov/
 
 backend/db/example_sql/
 backend/db/query_history.sqlite
+backend/db/query_history.sqlite-*
+backend/db/.readyz_probe
+deploy/*.local.service

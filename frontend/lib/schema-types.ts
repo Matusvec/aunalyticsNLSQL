@@ -25,3 +25,22 @@ export type DatabaseEntry = {
   filename: string;
   size_bytes: number;
 };
+
+export type SchemaGraphTable = {
+  name: string;
+  row_count: number | null;
+  columns: SchemaColumn[];
+};
+
+export type SchemaGraphEdge = {
+  from_table: string;
+  from_column: string;
+  to_table: string;
+  to_column: string;
+};
+
+export type SchemaGraph = {
+  database: string;
+  tables: SchemaGraphTable[];
+  foreign_keys: SchemaGraphEdge[];
+};

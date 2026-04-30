@@ -1,16 +1,19 @@
 # API backend
 fastapi==0.135.2
 uvicorn==0.42.0
+gunicorn==23.0.0
 pydantic==2.12.5
+pydantic-settings==2.6.1
 httpx==0.28.1
 sqlglot==30.0.3
+slowapi==0.1.9
 
 # Local Ollama chat client
 ollama==0.6.1
 
-# File upload (Task 5) — CSV/JSON → SQLite
+# File upload — CSV/JSON → SQLite
 pandas==2.2.3
 python-multipart==0.0.9
 
-# Load GEMINI_API_KEY and other settings from .env
+# Load environment variables from .env
 python-dotenv==1.0.1

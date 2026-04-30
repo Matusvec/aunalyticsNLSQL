@@ -51,7 +51,7 @@ py -m pip install -r requirements-dev.txt
 
 ## Run The Backend
 
-Start the FastAPI app with the helper script:
+### Development
 
 ```bash
 ./start_dev_services.sh
@@ -61,9 +61,23 @@ Start the FastAPI app with the helper script:
 .\start_dev_services.ps1
 ```
 
-The startup scripts prefer a virtualenv at the repo root (`.venv`) or under `backend/.venv`, then fall back to `py`, `python`, or `python3`.
+The dev script runs uvicorn with `--reload` (hot reload). It prefers a virtualenv at the repo root (`.venv`) or under `backend/.venv`, then falls back to `py`, `python`, or `python3`. Stop with `Ctrl-C`.
 
-This starts the API from `backend/app/main.py`. Stop it with `Ctrl-C`.
+### Production
+
+```bash
+./start_prod_services.sh
+```
+
+The prod script runs `gunicorn` with `uvicorn.workers.UvicornWorker`. It requires a real venv at `.venv/` or `backend/.venv/` with `requirements.txt` installed. Configure via env vars:
+
+- `APP_HOST` (default `127.0.0.1`)
+- `APP_PORT` (default `8000`)
+- `APP_WORKERS` (default `2`)
+- `APP_TIMEOUT` (default `60` seconds)
+- `APP_GRACEFUL_TIMEOUT`, `APP_KEEPALIVE`
+
+Front it with nginx/Caddy for TLS termination — see `deploy/nginx.conf.example`. systemd unit templates live in `deploy/`. The full settings reference is in `.env.example`.
 
 If PowerShell blocks script execution, you may need:
 
@@ -75,7 +89,8 @@ Set-ExecutionPolicy Unrestricted
 
 Once the backend is running, the main routes are:
 
-- `GET /health`: health check
+- `GET /health`: liveness probe (always 200 if process is up)
+- `GET /ready`: readiness probe (checks DB dir, history DB, and at least one LLM backend; 503 if nothing is reachable)
 - `GET /api/schema/{db_filename}`: full schema details
 - `GET /api/schema-summary/{db_filename}`: compact schema summary
 - `POST /api/generate-sql`: generate validated read-only SQL from a question

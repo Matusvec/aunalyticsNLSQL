@@ -9,12 +9,12 @@ from typing import Any, Callable, Optional
 import httpx
 
 from app.services.sql_validator import normalize_readonly_sql, validate_readonly_sql
+from app.settings import get_settings
+
 
 logger = logging.getLogger(__name__)
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta"
-DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
-GEMINI_TIMEOUT_SECONDS = 60.0
 
 
 class GeminiNotConfiguredError(RuntimeError):
@@ -26,8 +26,14 @@ class GeminiGenerationError(RuntimeError):
 
 
 def get_api_key() -> Optional[str]:
-    key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-    return key.strip() if key else None
+    # Read env directly; .env is loaded via python-dotenv at app startup, so any
+    # configured key is present in os.environ. This makes tests deterministic when
+    # they call monkeypatch.delenv.
+    raw = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if raw is None:
+        return None
+    cleaned = raw.strip()
+    return cleaned or None
 
 
 def is_configured() -> bool:
@@ -43,6 +49,25 @@ Convert the user's question into exactly one read-only SQLite query (SELECT or W
 - Every alias.column reference must use a real column from that aliased table.
 - Prefer LIMIT for browsing queries.
 - If the question is ambiguous, pick the most reasonable interpretation and list it in assumptions.
+
+Text filter and case-sensitivity rules (READ CAREFULLY):
+- SQLite's `=`, `IN (...)` and `<>` are case-sensitive on TEXT columns by default.
+- The user types in plain English ("red", "active", "us"); their casing rarely matches storage.
+- Default for equality / IN filters on a TEXT column: make it case-insensitive.
+  - Preferred: `column = 'value' COLLATE NOCASE`
+  - Or: `LOWER(column) = LOWER('value')`
+  - Or for IN: `LOWER(column) IN ('a','b','c')`
+- For LIKE: lowercase the pattern and wrap the column in LOWER, e.g. `LOWER(col) LIKE '%red%'`.
+- Only skip case-insensitive treatment when casing is clearly meaningful (codes, hashes, etc.).
+- The schema may include "Sample rows (illustrative, not exhaustive)" — use them to see real
+  values like "Red" vs "red". Sample rows are not the full dataset, so still apply the
+  case-insensitive rule unless the entire sample shows uniform casing.
+- Never assume a value exists; if unsure, write the filter case-insensitively and add an
+  entry to assumptions.
+
+Sample data:
+- A few example rows may appear under each table. Use them to pick correct value spellings
+  and to understand the shape of the data, but do NOT assume the rest of the table looks the same.
 
 Respond with JSON ONLY (no markdown fences, no prose) in this exact shape:
 {{"sql": "<single SQLite SELECT statement>",
@@ -74,6 +99,7 @@ def _extract_json_object(text: str) -> dict[str, Any]:
 
 
 async def _request_gemini(prompt: str, model: str, api_key: str) -> str:
+    settings = get_settings()
     url = f"{GEMINI_API_BASE}/models/{model}:generateContent"
     payload = {
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
@@ -82,21 +108,22 @@ async def _request_gemini(prompt: str, model: str, api_key: str) -> str:
             "responseMimeType": "application/json",
         },
     }
-    async with httpx.AsyncClient(timeout=GEMINI_TIMEOUT_SECONDS) as client:
+    async with httpx.AsyncClient(timeout=settings.gemini_timeout_seconds) as client:
         response = await client.post(
             url,
             headers={"x-goog-api-key": api_key},
             json=payload,
         )
     if response.status_code >= 400:
+        # Don't echo upstream body — it may include the prompt verbatim.
         raise GeminiGenerationError(
-            f"Gemini API returned {response.status_code}: {response.text[:300]}"
+            f"Gemini API returned HTTP {response.status_code}"
         )
     data = response.json()
     try:
         return data["candidates"][0]["content"]["parts"][0]["text"]
     except (KeyError, IndexError, TypeError) as exc:
-        raise GeminiGenerationError(f"Unexpected Gemini response shape: {data}") from exc
+        raise GeminiGenerationError("Unexpected Gemini response shape") from exc
 
 
 async def generate_sql_via_gemini(
@@ -113,7 +140,8 @@ async def generate_sql_via_gemini(
             "GEMINI_API_KEY is not set; cannot fall back to Gemini."
         )
 
-    selected_model = model or os.getenv("GEMINI_MODEL") or DEFAULT_GEMINI_MODEL
+    settings = get_settings()
+    selected_model = model or settings.gemini_model
     prompt = _build_prompt(question=question, schema_summary=schema_summary)
 
     logger.info("Falling back to Gemini model=%s", selected_model)
@@ -122,12 +150,12 @@ async def generate_sql_via_gemini(
     try:
         parsed = _extract_json_object(raw)
     except json.JSONDecodeError as exc:
-        raise GeminiGenerationError(f"Gemini did not return valid JSON: {raw[:300]}") from exc
+        raise GeminiGenerationError("Gemini did not return valid JSON.") from exc
 
     try:
         result = SQLGenerationResult.model_validate(parsed)
     except Exception as exc:
-        raise GeminiGenerationError(f"Gemini output failed schema validation: {exc}") from exc
+        raise GeminiGenerationError("Gemini output failed schema validation.") from exc
 
     normalized_sql = normalize_readonly_sql(result.sql.strip())
     validate_readonly_sql(normalized_sql)

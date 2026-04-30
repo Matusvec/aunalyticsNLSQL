@@ -1,0 +1,33 @@
+# Caddy is just an HTTP router behind cloudflared.
+# Cloudflare's edge terminates TLS and adds the public hostname.
+
+{
+    auto_https off
+    admin off
+}
+
+# Match any Host header (cloudflared forwards the trycloudflare.com hostname).
+:8080 {
+    encode zstd gzip
+
+    @backend {
+        path /api/* /health /ready
+    }
+    handle @backend {
+        reverse_proxy 127.0.0.1:8000 {
+            transport http {
+                read_timeout 300s
+                write_timeout 300s
+            }
+        }
+    }
+
+    handle {
+        reverse_proxy 127.0.0.1:3000
+    }
+
+    log {
+        output file /home/admin/aunalyticsNLSQL/logs/caddy.log
+        format console
+    }
+}

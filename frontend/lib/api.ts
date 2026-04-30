@@ -2,7 +2,7 @@
  * Typed helpers for the FastAPI backend. Base URL from NEXT_PUBLIC_API_URL.
  */
 
-import type { DatabaseEntry, SchemaPayload } from "@/lib/schema-types";
+import type { DatabaseEntry, SchemaGraph, SchemaPayload } from "@/lib/schema-types";
 
 export function getApiBaseUrl(): string {
   return process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") ?? "http://127.0.0.1:8000";
@@ -16,6 +16,16 @@ export async function fetchSchema(dbFilename: string): Promise<SchemaPayload> {
     throw new Error(detail || `Schema request failed: ${res.status}`);
   }
   return res.json() as Promise<SchemaPayload>;
+}
+
+export async function fetchSchemaGraph(dbFilename: string): Promise<SchemaGraph> {
+  const url = `${getApiBaseUrl()}/api/schema-graph/${encodeURIComponent(dbFilename)}`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(detail || `Schema graph request failed: ${res.status}`);
+  }
+  return res.json() as Promise<SchemaGraph>;
 }
 
 export async function listDatabases(): Promise<{ databases: DatabaseEntry[] }> {
@@ -87,17 +97,46 @@ export type AskResponse = {
   limit_applied: number | null;
   confidence?: number | null;
   assumptions?: string[];
+  tier?: string | null;
 };
+
+export type AgentTier = {
+  name: string;
+  max_iterations: number;
+  max_submit_retries: number;
+  description: string;
+};
+
+export type AgentEvent =
+  | { type: "request_id"; request_id: string }
+  | { type: "start"; tier: string; max_iterations: number; max_submit_retries: number; model: string }
+  | { type: "brief"; brief: string }
+  | { type: "iteration"; iteration: number }
+  | { type: "model_text"; text: string }
+  | { type: "tool_call"; iteration: number; name: string; args: Record<string, unknown> }
+  | { type: "tool_result"; iteration: number; name: string; summary: Record<string, unknown> }
+  | { type: "submit_failed"; attempt: number; max_attempts: number; error: string; sql?: string }
+  | { type: "submit_ok"; sql: string; confidence: number | null; assumptions: string[] }
+  | { type: "nudge"; reason: string }
+  | ({ type: "final" } & AskResponse)
+  | { type: "error"; status: number; detail: string };
+
+export async function fetchAgentTiers(): Promise<{ default: string; tiers: AgentTier[] }> {
+  const res = await fetch(`${getApiBaseUrl()}/api/agent/tiers`);
+  if (!res.ok) throw new Error(`Failed to load tiers: ${res.status}`);
+  return res.json() as Promise<{ default: string; tiers: AgentTier[] }>;
+}
 
 export async function askQuestion(
   dbFilename: string,
   question: string,
   limit = 200,
+  tier?: string,
 ): Promise<AskResponse> {
   const res = await fetch(`${getApiBaseUrl()}/api/ask`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ db_filename: dbFilename, question, limit }),
+    body: JSON.stringify({ db_filename: dbFilename, question, limit, tier }),
   });
   if (!res.ok) {
     let detail = "";
@@ -110,6 +149,72 @@ export async function askQuestion(
     throw new Error(detail || `Ask failed (${res.status})`);
   }
   return res.json() as Promise<AskResponse>;
+}
+
+/**
+ * Stream agent events from POST /api/ask/stream.
+ * `onEvent` is called for every parsed Server-Sent Event.
+ * Resolves when the stream ends; rejects on transport failure or abort.
+ */
+export async function askQuestionStream(
+  dbFilename: string,
+  question: string,
+  limit: number,
+  tier: string | undefined,
+  onEvent: (event: AgentEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(`${getApiBaseUrl()}/api/ask/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ db_filename: dbFilename, question, limit, tier }),
+    signal,
+  });
+  if (!res.ok || !res.body) {
+    let detail = "";
+    try {
+      const body = (await res.json()) as { detail?: string };
+      detail = body.detail ?? "";
+    } catch {
+      try {
+        detail = await res.text();
+      } catch {
+        /* ignore */
+      }
+    }
+    throw new Error(detail || `Ask stream failed (${res.status})`);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    while (true) {
+      const idx = buffer.indexOf("\n\n");
+      if (idx === -1) break;
+      const message = buffer.slice(0, idx);
+      buffer = buffer.slice(idx + 2);
+
+      const dataLines = message
+        .split("\n")
+        .filter((line) => line.startsWith("data: "))
+        .map((line) => line.slice(6));
+
+      if (dataLines.length === 0) continue;
+      const payload = dataLines.join("\n");
+      try {
+        const event = JSON.parse(payload) as AgentEvent;
+        onEvent(event);
+      } catch (err) {
+        console.error("agent stream parse error", err, payload.slice(0, 200));
+      }
+    }
+  }
 }
 
 export type HistoryItem = {

@@ -93,7 +93,16 @@ wait_for_first_exit() {
 
 trap cleanup EXIT INT TERM
 
-"${PYTHON_CMD[@]}" -m uvicorn app.main:app --reload --host "$APP_HOST" --port "$APP_PORT" &
+"${PYTHON_CMD[@]}" -m uvicorn app.main:app \
+  --reload \
+  --reload-dir app \
+  --reload-exclude 'db/*' \
+  --reload-exclude '*.sqlite' \
+  --reload-exclude '*.db' \
+  --reload-exclude '*.sqlite-journal' \
+  --reload-exclude '*.sqlite-wal' \
+  --reload-exclude '*.sqlite-shm' \
+  --host "$APP_HOST" --port "$APP_PORT" &
 APP_PID=$!
 
 echo "FastAPI app: http://$APP_HOST:$APP_PORT"

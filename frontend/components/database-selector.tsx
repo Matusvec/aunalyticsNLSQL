@@ -28,35 +28,39 @@ export function DatabaseSelector({
 }: DatabaseSelectorProps) {
   if (databases.length === 0) {
     return (
-      <div className="flex flex-col gap-2">
-        <Label>Database</Label>
-        <p className="text-sm text-muted-foreground">No databases found. Upload a file below.</p>
-      </div>
+      <p className="text-sm text-muted-foreground">
+        No databases yet — upload a SQLite, CSV, or JSON file to get started.
+      </p>
     );
   }
 
   const v = value ?? databases[0]?.filename ?? "";
 
   return (
-    <div className="flex flex-col gap-2">
-      <Label htmlFor="db-select">Active database</Label>
+    <>
+      <Label htmlFor="db-select" className="sr-only">
+        Active database
+      </Label>
       <Select
         value={v}
         onValueChange={(next) => onValueChange(next ?? null)}
         disabled={disabled}
       >
-        <SelectTrigger id="db-select" className="w-full max-w-md" size="default">
+        <SelectTrigger id="db-select" className="w-full" size="default">
           <SelectValue placeholder="Choose a database" />
         </SelectTrigger>
         <SelectContent>
           {databases.map((d) => (
             <SelectItem key={d.filename} value={d.filename}>
-              {d.filename} ({formatBytes(d.size_bytes)})
+              <span className="font-mono">{d.filename}</span>
+              <span className="ml-2 text-xs text-muted-foreground">
+                {formatBytes(d.size_bytes)}
+              </span>
             </SelectItem>
           ))}
         </SelectContent>
       </Select>
-    </div>
+    </>
   );
 }
 

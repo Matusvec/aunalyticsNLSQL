@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import re
 import time
 from typing import Any, Callable, Optional
@@ -10,33 +9,43 @@ import httpx
 from pydantic import BaseModel, Field, field_validator
 
 from app.services.sql_validator import normalize_readonly_sql, validate_readonly_sql
+from app.settings import get_settings
 
 
-OLLAMA_URL = "http://localhost:11434/api/chat"
-OLLAMA_TAGS_URL = "http://localhost:11434/api/tags"
 DEFAULT_OLLAMA_MODEL = "qwen2.5-coder:3b"
 PREFERRED_OLLAMA_MODELS = ("qwen2.5-coder:3b", "phi3", "qwen3", "llama3.2", "gemma3")
-SQL_GENERATION_ATTEMPT_TIMEOUTS_SECONDS = (45.0, 180.0)
 MAX_SQL_GENERATION_ATTEMPTS = 2
+
 logger = logging.getLogger(__name__)
-ALIASED_COLUMN_ERROR_RE = re.compile(r"no such column:\s*([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)", re.IGNORECASE)
-_cached_ollama_model: Optional[str] = None
-_env_ollama_model = os.getenv("OLLAMA_MODEL")
-if _env_ollama_model:
-    _cached_ollama_model = _env_ollama_model
+ALIASED_COLUMN_ERROR_RE = re.compile(
+    r"no such column:\s*([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)",
+    re.IGNORECASE,
+)
+
+
+# Module-level cache for the resolved Ollama model. Refreshed when its TTL elapses or on
+# connect errors. Tests can call reset_model_cache() to invalidate.
+_model_cache: dict[str, Any] = {"name": None, "expires_at": 0.0}
+
+
+def reset_model_cache() -> None:
+    _model_cache["name"] = None
+    _model_cache["expires_at"] = 0.0
 
 
 class SQLGenerationResult(BaseModel):
     sql: str = Field(description="A single read-only SQLite SELECT query")
     assumptions: list[str] = Field(
         default_factory=list,
-        description="List every meaningful assumption made while generating the query."
+        description="List every meaningful assumption made while generating the query.",
     )
-    confidence: float = Field(ge=0.0, le=1.0,
+    confidence: float = Field(
+        ge=0.0,
+        le=1.0,
         description=(
             "Confidence in the SQL as a numeric score from 0.00 to 1.00, "
             "where higher means the schema match is stronger and the request is less ambiguous."
-        )
+        ),
     )
 
     @field_validator("confidence", mode="before")
@@ -55,6 +64,7 @@ class SQLGenerationAttempt(BaseModel):
 
 class SQLGenerationError(RuntimeError):
     pass
+
 
 def build_sql_prompt(question: str, schema_summary: str) -> str:
     return f"""
@@ -104,6 +114,31 @@ Strict alias and column rules:
 - SELECT aliases are not source columns and cannot be used as if they belong to a table.
 - Before outputting SQL, validate every alias.column reference against the schema summary.
 - If a referenced column does not exist on that aliased table, rewrite the query or choose a different join path. Never guess.
+
+Text filter and case-sensitivity rules (READ CAREFULLY):
+- SQLite's `=`, `IN (...)` and `<>` are case-sensitive on TEXT columns by default.
+- The user types in plain English ("red", "active", "us"); their casing rarely matches the stored data exactly.
+- Default behavior for any equality / IN filter on a TEXT column: make it case-insensitive.
+  - Preferred form: `column = 'value' COLLATE NOCASE`
+  - Or equivalently: `LOWER(column) = LOWER('value')`
+  - Or for IN: `LOWER(column) IN ('a','b','c')`
+- For LIKE filters, write the pattern in lowercase and wrap the column in LOWER:
+  `LOWER(column) LIKE '%red%'`
+- Only skip the case-insensitive treatment when the user clearly cares about exact casing
+  (e.g. the question explicitly mentions case, or the value is obviously case-sensitive
+  like an API key, hex hash, or codename).
+- The schema may include "Sample rows (illustrative, not exhaustive)" — use them to
+  see how values are actually stored (e.g. "Red" vs "red"). Sample rows are NOT exhaustive,
+  so still apply the case-insensitive rule above unless casing in the data is clearly uniform.
+- Never assume a value exists in the table just because the user named it. If unsure, write the
+  filter case-insensitively and include the assumption in the assumptions list.
+
+Sample data rules:
+- The schema may include a few example rows under each table. Treat them as hints about the
+  shape and values, NOT as the entire dataset.
+- When the user asks about a specific value, look at the sample rows first to see if a similar
+  value exists, and pick the closest match's exact spelling/casing — but still wrap the comparison
+  in COLLATE NOCASE / LOWER unless the casing is uniformly consistent across the sample.
 
 Assumptions Rules:
 - If the user's wording is ambiguous, list the assumptions you made.
@@ -180,29 +215,40 @@ def build_error_specific_guidance(error_message: str) -> str:
         "- Re-check the schema summary and replace the bad alias column with a real column name."
     )
 
-async def resolve_ollama_model(client: httpx.AsyncClient) -> Optional[str]:
-    global _cached_ollama_model
 
-    if _cached_ollama_model:
-        return _cached_ollama_model
+async def resolve_ollama_model(client: httpx.AsyncClient) -> Optional[str]:
+    settings = get_settings()
+    if settings.ollama_model:
+        return settings.ollama_model
+
+    now = time.monotonic()
+    if _model_cache["name"] and now < _model_cache["expires_at"]:
+        return _model_cache["name"]
 
     try:
-        response = await client.get(OLLAMA_TAGS_URL, timeout=5.0)
+        response = await client.get(settings.ollama_tags_url, timeout=5.0)
         response.raise_for_status()
         models = response.json().get("models", [])
     except httpx.HTTPError:
-        _cached_ollama_model = DEFAULT_OLLAMA_MODEL
-        return _cached_ollama_model
+        # Don't poison the cache on connect errors — the caller may fall back to Gemini.
+        return DEFAULT_OLLAMA_MODEL
 
     available_models = [model.get("name", "") for model in models if model.get("name")]
+    selected: str | None = None
     for preferred_model in PREFERRED_OLLAMA_MODELS:
         for available_model in available_models:
             if available_model == preferred_model or available_model.startswith(f"{preferred_model}:"):
-                _cached_ollama_model = available_model
-                return _cached_ollama_model
+                selected = available_model
+                break
+        if selected:
+            break
 
-    _cached_ollama_model = available_models[0] if available_models else DEFAULT_OLLAMA_MODEL
-    return _cached_ollama_model
+    if not selected:
+        selected = available_models[0] if available_models else DEFAULT_OLLAMA_MODEL
+
+    _model_cache["name"] = selected
+    _model_cache["expires_at"] = now + settings.ollama_model_cache_ttl_seconds
+    return selected
 
 
 async def _request_sql_generation(
@@ -211,6 +257,7 @@ async def _request_sql_generation(
     prompt: str,
     timeout_seconds: float,
 ) -> SQLGenerationResult:
+    settings = get_settings()
     payload: dict[str, Any] = {
         "model": model,
         "stream": False,
@@ -230,7 +277,7 @@ async def _request_sql_generation(
         "format": SQLGenerationResult.model_json_schema(),
     }
     response = await client.post(
-        OLLAMA_URL,
+        settings.ollama_chat_url,
         json=payload,
         timeout=timeout_seconds,
     )
@@ -249,6 +296,7 @@ def _normalize_and_verify_generation(
     if verifier is not None:
         verifier(normalized_sql)
     return result.model_copy(update={"sql": normalized_sql})
+
 
 async def _try_gemini_fallback(
     question: str,
@@ -279,9 +327,16 @@ async def generate_sql_from_question(
     schema_summary: str,
     verifier: Callable[[str], None] | None = None,
 ) -> SQLGenerationResult:
+    settings = get_settings()
+    attempt_timeouts = settings.attempt_timeouts
+    if len(attempt_timeouts) < MAX_SQL_GENERATION_ATTEMPTS:
+        attempt_timeouts = attempt_timeouts + (attempt_timeouts[-1],) * (
+            MAX_SQL_GENERATION_ATTEMPTS - len(attempt_timeouts)
+        )
+
     prompt = build_sql_prompt(question=question, schema_summary=schema_summary)
 
-    async with httpx.AsyncClient(timeout=max(SQL_GENERATION_ATTEMPT_TIMEOUTS_SECONDS)) as client:
+    async with httpx.AsyncClient(timeout=max(attempt_timeouts)) as client:
         try:
             model = await resolve_ollama_model(client)
         except httpx.ConnectError as exc:
@@ -300,7 +355,7 @@ async def generate_sql_from_question(
         last_error: ValueError | None = None
         for attempt_number in range(1, MAX_SQL_GENERATION_ATTEMPTS + 1):
             attempt_started = time.perf_counter()
-            timeout_seconds = SQL_GENERATION_ATTEMPT_TIMEOUTS_SECONDS[attempt_number - 1]
+            timeout_seconds = attempt_timeouts[attempt_number - 1]
             try:
                 result = await _request_sql_generation(
                     client=client,
@@ -309,6 +364,7 @@ async def generate_sql_from_question(
                     timeout_seconds=timeout_seconds,
                 )
             except httpx.ConnectError as exc:
+                reset_model_cache()
                 fallback = await _try_gemini_fallback(
                     question=question,
                     schema_summary=schema_summary,
@@ -323,11 +379,10 @@ async def generate_sql_from_question(
             except httpx.TimeoutException as exc:
                 elapsed_seconds = time.perf_counter() - attempt_started
                 logger.warning(
-                    "SQL generation timed out on attempt %s/%s after %.2fs for question=%r",
+                    "SQL generation timed out on attempt %s/%s after %.2fs",
                     attempt_number,
                     MAX_SQL_GENERATION_ATTEMPTS,
                     elapsed_seconds,
-                    question,
                 )
                 if attempt_number == MAX_SQL_GENERATION_ATTEMPTS:
                     raise SQLGenerationError(
@@ -348,11 +403,10 @@ async def generate_sql_from_question(
             except httpx.HTTPError as exc:
                 elapsed_seconds = time.perf_counter() - attempt_started
                 logger.exception(
-                    "SQL generation HTTP error on attempt %s/%s after %.2fs for question=%r",
+                    "SQL generation HTTP error on attempt %s/%s after %.2fs",
                     attempt_number,
                     MAX_SQL_GENERATION_ATTEMPTS,
                     elapsed_seconds,
-                    question,
                 )
                 message = str(exc).strip() or exc.__class__.__name__
                 raise SQLGenerationError(
@@ -365,11 +419,10 @@ async def generate_sql_from_question(
                 elapsed_seconds = time.perf_counter() - attempt_started
                 last_error = exc
                 logger.info(
-                    "SQL generation attempt %s/%s failed verification after %.2fs for question=%r: %s",
+                    "SQL generation attempt %s/%s failed verification after %.2fs: %s",
                     attempt_number,
                     MAX_SQL_GENERATION_ATTEMPTS,
                     elapsed_seconds,
-                    question,
                     exc,
                 )
                 prompt = build_sql_repair_prompt(
